@@ -1,8 +1,11 @@
 import type { ApprovalDecision, ApprovalKind, ApprovalRequest } from "../../approvals/types.js";
 import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
 
-export function approvalKindForMethod(method: string): ApprovalKind | undefined {
-  if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") return "command";
+export function approvalKindForMethod(method: string, params: Record<string, unknown> = {}): ApprovalKind | undefined {
+  if (method === "item/commandExecution/requestApproval") {
+    return stringValue(params.kind) === "writeStdin" ? "terminal_input" : "command";
+  }
+  if (method === "execCommandApproval") return "command";
   if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") return "file_change";
   if (method === "item/permissions/requestApproval") return "permissions";
   return undefined;
@@ -29,12 +32,12 @@ export function approvalFromServerRequest(
   requestId: string | number,
   params: Record<string, unknown>,
 ): ApprovalRequest | undefined {
-  const kind = approvalKindForMethod(method);
+  const kind = approvalKindForMethod(method, params);
   if (!kind) return undefined;
   const threadId = stringValue(params.threadId) ?? stringValue(params.conversationId) ?? "unknown-thread";
   const turnId = stringValue(params.turnId) ?? stringValue(params.callId) ?? "unknown-turn";
   const itemId = stringValue(params.itemId) ?? stringValue(params.callId) ?? String(requestId);
-  const command = stringValue(params.command) ?? arrayValue(params.command).filter((part) => typeof part === "string").join(" ");
+  const command = commandFromParams(params);
   const cwd = stringValue(params.cwd) ?? stringValue(params.grantRoot);
   const reason = stringValue(params.reason);
   return {
@@ -47,9 +50,37 @@ export function approvalFromServerRequest(
     cwd,
     reason,
     risk: command && riskyCommand(command) ? "high" : undefined,
-    availableDecisions: ["approve", "approve-session", "deny", "cancel"],
+    availableDecisions: availableDecisionsFromParams(params, kind),
     raw: params,
   };
+}
+
+function commandFromParams(params: Record<string, unknown>): string | undefined {
+  const command = stringValue(params.command) ?? arrayValue(params.command)
+    .filter((part): part is string => typeof part === "string")
+    .join(" ");
+  return command.trim() ? command : undefined;
+}
+
+function availableDecisionsFromParams(
+  params: Record<string, unknown>,
+  kind: ApprovalKind,
+): ApprovalDecision[] {
+  const fromServer = arrayValue(params.availableDecisions)
+    .map(approvalDecisionFromServer)
+    .filter((decision): decision is ApprovalDecision => Boolean(decision));
+  if (fromServer.length > 0) return [...new Set(fromServer)];
+  return kind === "terminal_input"
+    ? ["approve", "cancel"]
+    : ["approve", "approve-session", "deny", "cancel"];
+}
+
+function approvalDecisionFromServer(value: unknown): ApprovalDecision | undefined {
+  if (value === "accept") return "approve";
+  if (value === "acceptForSession") return "approve-session";
+  if (value === "decline") return "deny";
+  if (value === "cancel") return "cancel";
+  return undefined;
 }
 
 function appServerDecision(decision: ApprovalDecision): "accept" | "acceptForSession" | "decline" | "cancel" {

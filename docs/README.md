@@ -85,6 +85,12 @@
 - `codex-2026-07-latest-adaptation-design.zh-CN.md`
   Codex 2026-07 最新模型与协议适配设计。基于官方 GPT-5.6 最新模型页和 `references/openai-codex` HEAD `5c19155c`，说明模型动态元数据、开放 reasoning effort、service tier、协议漂移稳定性和后续新功能候选。
 
+- `codex-current-compatibility-audit-plan.zh-CN.md`
+  本轮最新版 Codex 兼容性审计与实施设计。以最新官方源码为主证据，记录 Chat-Codex 当前能力、模型适配、app-server 协议差异、渠道取舍、实施优先级和验收计划；第一轮源码审计已完成，协议项 1（`writeStdin`）的中间件实现已完成，其余项待逐项讨论。
+
+- `codex-app-server-current-protocol-compatibility.zh-CN.md`
+  最新 Codex app-server 协议专用适配清单。逐项比对当前本地 Codex 源码与 Chat-Codex 已有能力，明确新增 RPC、通知、审批、用户输入、上下文刷新和 item 字段哪些必须适配、哪些仅分类、哪些当前不开放；不讨论模型或新产品功能。
+
 - `codex-reference-81da9deb0-compatibility.zh-CN.md`
   Codex 参考版本 `81da9deb0` 兼容性评估。以保持本地 Chat-Codex 正常运作为目标，记录当前 app-server 协议结论、远程执行环境与 `wait_for_environment` 的适配边界、已完成的协议分类和后续实际 CLI 升级门禁。
 

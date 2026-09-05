@@ -596,6 +596,30 @@ class AdapterApprovalIdCodexAdapter extends MockCodexAdapter {
   }
 }
 
+class TerminalInputApprovalCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = "terminal-input-approval-turn-1";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "approval.requested",
+      sessionId,
+      turnId,
+      approval: {
+        kind: "terminal_input",
+        adapterApprovalId: "stdin-server-request-1",
+        sessionId,
+        turnId,
+        itemId: "original-command-item-1",
+        command: "write_stdin --session-id 42 'confirm\\n'",
+        cwd: "/workspace/project",
+        reason: "程序正在等待确认",
+        availableDecisions: ["approve", "cancel"],
+      },
+    };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
 class ParallelProbeCodexAdapter extends MockCodexAdapter {
   active = 0;
   maxActive = 0;
@@ -2119,6 +2143,37 @@ test("Bridge resolves approvals with adapter approval ids when provided", async 
   assert.equal(codex.resolvedApprovals.length, 1);
   assert.equal(codex.resolvedApprovals[0].approvalKey, "server-request-1");
   assert.equal(codex.resolvedApprovals[0].decision, "approve");
+});
+
+test("Bridge maps terminal-input /NO to cancel and rejects /P without consuming the approval", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new TerminalInputApprovalCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("触发终端输入审批");
+  await bridge.waitForIdle();
+
+  const approvalText = channel.sentMessages.find((message) => message.text.includes("Codex 请求终端输入审批"))?.text ?? "";
+  assert.match(approvalText, /不会启动新命令/);
+  assert.match(approvalText, /write_stdin --session-id 42 'confirm\\n'/);
+  assert.match(approvalText, /\/OK 本次允许向终端输入/);
+  assert.match(approvalText, /\/NO 取消输入并中止当前任务/);
+  assert.doesNotMatch(approvalText, /\/P/);
+
+  await channel.emitText("/P");
+  assert.equal(codex.resolvedApprovals.length, 0);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("不支持 /P 本会话通过")));
+
+  await channel.emitText("/NO");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  assert.deepEqual(codex.resolvedApprovals, [{
+    approvalKey: "stdin-server-request-1",
+    decision: "cancel",
+  }]);
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("已取消本次终端输入，Codex 将中止当前任务")));
 });
 
 test("Bridge approves latest approval for the current session with /P", async () => {

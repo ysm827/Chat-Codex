@@ -391,6 +391,14 @@ rl.on("line", (line) => {
       send({ method: "item/tool/call", id: "tool-1", params: { threadId, turnId, callId: "call-1", namespace: "bridge", tool: "dangerous", arguments: {} } });
       return;
     }
+    if (prompt.includes("write stdin approval")) {
+      send({ method: "item/commandExecution/requestApproval", id: "stdin-approval-1", params: { kind: "writeStdin", threadId, turnId, itemId: "original-command-item-1", approvalId: "opaque-stdin-callback-id", startedAtMs: Date.now(), command: "write_stdin --session-id 42 'confirm\\n'", cwd: message.params.cwd, reason: "program waits for confirmation", availableDecisions: ["accept", "cancel"] } });
+      return;
+    }
+    if (prompt.includes("write stdin without command")) {
+      send({ method: "item/commandExecution/requestApproval", id: "stdin-no-command-1", params: { kind: "writeStdin", threadId, turnId, itemId: "original-command-item-1", approvalId: "opaque-stdin-callback-id", startedAtMs: Date.now(), cwd: message.params.cwd, reason: "missing displayable input", availableDecisions: ["accept", "cancel"] } });
+      return;
+    }
     if (prompt.includes("approval resolved externally")) {
       send({ method: "item/commandExecution/requestApproval", id: "approval-external", params: { threadId, turnId, itemId: "cmd-external", startedAtMs: Date.now(), command: "touch externally-approved.txt", cwd: message.params.cwd, reason: "external approval" } });
       send({ method: "serverRequest/resolved", params: { threadId, requestId: "approval-external" } });
@@ -431,6 +439,11 @@ rl.on("line", (line) => {
   }
   if (message.id === "approval-1") {
     send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "decision " + message.result.decision, phase: null, memoryCitation: null } } });
+    send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+    return;
+  }
+  if (message.id === "stdin-approval-1" || message.id === "stdin-no-command-1") {
+    send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "stdin decision " + message.result.decision, phase: null, memoryCitation: null } } });
     send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
     return;
   }
@@ -509,6 +522,54 @@ test("AppServerCodexAdapter routes command approvals through resolveApproval", a
   assert.ok(events.some((event) => event.type === "approval.requested"));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "decision accept"));
   assert.ok(events.some((event) => event.type === "turn.completed"));
+});
+
+test("AppServerCodexAdapter maps writeStdin /NO semantics to cancel without treating it as a new command", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "write stdin approval")) {
+    events.push(event);
+    if (event.type === "approval.requested") {
+      assert.equal(event.approval.kind, "terminal_input");
+      assert.equal(event.approval.adapterApprovalId, "stdin-approval-1");
+      assert.equal(event.approval.itemId, "original-command-item-1");
+      assert.equal(event.approval.command, "write_stdin --session-id 42 'confirm\n'");
+      assert.deepEqual(event.approval.availableDecisions, ["approve", "cancel"]);
+      await adapter.resolveApproval(event.approval.adapterApprovalId, "deny");
+    }
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "approval.requested" && event.approval.kind === "terminal_input"));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "stdin decision cancel"));
+  assert.ok(events.some((event) => event.type === "turn.completed"));
+});
+
+test("AppServerCodexAdapter cancels writeStdin when the input cannot be safely displayed", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "write stdin without command")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.equal(events.some((event) => event.type === "approval.requested"), false);
+  assert.ok(events.some((event) => event.type === "assistant.progress" && /未提供可安全展示的输入/.test(event.text)));
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "stdin decision cancel"));
 });
 
 test("AppServerCodexAdapter resolves request_user_input through bridge answers", async () => {

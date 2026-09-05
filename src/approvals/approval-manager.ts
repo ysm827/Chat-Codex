@@ -1,4 +1,5 @@
 import type { ApprovalDecision, ApprovalRequest, PendingApproval } from "./types.js";
+import { availableApprovalDecisions, formatApprovalCommandForDisplay } from "./approval-policy.js";
 
 export interface ApprovalManagerOptions {
   ttlMs?: number | null;
@@ -58,6 +59,9 @@ export class ApprovalManager {
     if (pending.status !== "pending") {
       throw new Error(`审批请求 ${approvalKey} 已处理`);
     }
+    if (!availableApprovalDecisions(pending).includes(decision)) {
+      throw new Error("该审批不支持此处理方式。");
+    }
     pending.status = "resolved";
     pending.decision = decision;
     this.approvals.set(approvalKey, pending);
@@ -93,6 +97,24 @@ export class ApprovalManager {
   }
 
   formatForChannel(pending: PendingApproval): string {
+    const command = formatApprovalCommandForDisplay(pending);
+    const decisions = availableApprovalDecisions(pending);
+    if (pending.kind === "terminal_input") {
+      const lines = [
+        "Codex 请求终端输入审批",
+        "类型: 终端输入（不会启动新命令）",
+        `Session: ${shortId(pending.sessionId)}`,
+        `Turn: ${shortId(pending.turnId)}`,
+      ];
+      if (pending.cwd) lines.push(`CWD: ${pending.cwd}`);
+      if (command) lines.push("将写入已运行终端:", command);
+      if (pending.reason) lines.push(`Reason: ${pending.reason}`);
+      if (pending.risk) lines.push(`风险: ${pending.risk}`);
+      lines.push("", "快捷回复:");
+      if (decisions.includes("approve")) lines.push("/OK 本次允许向终端输入");
+      if (decisions.includes("cancel")) lines.push("/NO 取消输入并中止当前任务");
+      return lines.join("\n");
+    }
     const lines = [
       "Codex 请求审批",
       `类型: ${pending.kind}`,
@@ -100,16 +122,14 @@ export class ApprovalManager {
       `Turn: ${shortId(pending.turnId)}`,
     ];
     if (pending.cwd) lines.push(`CWD: ${pending.cwd}`);
-    if (pending.command) lines.push("Command:", pending.command);
+    if (command) lines.push("Command:", command);
     if (pending.reason) lines.push(`Reason: ${pending.reason}`);
     if (pending.risk) lines.push(`风险: ${pending.risk}`);
-    lines.push(
-      "",
-      "快捷回复:",
-      "/OK 通过当前审批",
-      "/P 本会话通过，后续同类操作尽量不再询问",
-      "/NO 拒绝当前审批",
-    );
+    lines.push("", "快捷回复:");
+    if (decisions.includes("approve")) lines.push("/OK 通过当前审批");
+    if (decisions.includes("approve-session")) lines.push("/P 本会话通过，后续同类操作尽量不再询问");
+    if (decisions.includes("deny")) lines.push("/NO 拒绝当前审批");
+    else if (decisions.includes("cancel")) lines.push("/NO 取消当前审批");
     return lines.join("\n");
   }
 

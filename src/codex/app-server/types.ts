@@ -1,4 +1,4 @@
-import type { ApprovalDecision } from "../../approvals/types.js";
+import type { ApprovalDecision, ApprovalRequest } from "../../approvals/types.js";
 import type {
   CodexCollaborationMode,
   CodexEvent,
@@ -46,6 +46,7 @@ export interface PendingServerApproval {
   requestId: string | number;
   sessionId: string;
   turnId: string;
+  approval: ApprovalRequest;
   params: Record<string, unknown>;
   resolve: (decision: ApprovalDecision) => Promise<void>;
 }

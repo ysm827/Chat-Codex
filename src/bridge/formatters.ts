@@ -1,4 +1,5 @@
 import type { ApprovalDecision, PendingApproval } from "../approvals/types.js";
+import { availableApprovalDecisions, formatApprovalCommandForDisplay } from "../approvals/approval-policy.js";
 import type { CodexRunPolicy, CodexRunPolicyStatus } from "../codex/codex-cli.js";
 import { truncateDisplayText } from "../codex/codex-cli.js";
 import type {
@@ -611,23 +612,27 @@ export function formatApprovalDecision(decision: ApprovalDecision): string {
 
 export function formatPendingApprovalStatus(approval: PendingApproval | undefined): Array<string | undefined> {
   if (!approval) return [];
+  const decisions = availableApprovalDecisions(approval);
+  const command = formatApprovalCommandForDisplay(approval);
   return [
     "",
     "**待处理审批**",
     `- 类型: ${formatApprovalKindForUser(approval.kind)}`,
+    approval.kind === "terminal_input" ? "- 说明: 将向已运行的终端输入内容，不会启动新命令。" : undefined,
     approval.cwd ? `- 工作目录: \`${approval.cwd}\`` : undefined,
     approval.reason ? `- 原因: ${approval.reason}` : undefined,
-    approval.command ? "```shell\n" + approval.command + "\n```" : undefined,
+    command ? "```shell\n" + command + "\n```" : undefined,
     "快捷回复：",
-    "```text\n/OK\n```",
-    "```text\n/P\n```",
-    "```text\n/NO\n```",
+    decisions.includes("approve") ? "```text\n/OK\n```" : undefined,
+    decisions.includes("approve-session") ? "```text\n/P\n```" : undefined,
+    decisions.includes("deny") || decisions.includes("cancel") ? "```text\n/NO\n```" : undefined,
   ];
 }
 
 export function formatApprovalKindForUser(kind: string): string {
   switch (kind) {
     case "command": return "命令执行";
+    case "terminal_input": return "终端输入";
     case "file_change": return "文件变更";
     case "permissions": return "权限变更";
     case "network": return "网络访问";

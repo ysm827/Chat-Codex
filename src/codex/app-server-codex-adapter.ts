@@ -1,4 +1,5 @@
 import type { ApprovalDecision } from "../approvals/types.js";
+import { normalizeApprovalDecision, unsupportedApprovalDecisionText } from "../approvals/approval-policy.js";
 import type {
   CodexAdapter,
   CodexBackgroundEventHandler,
@@ -416,7 +417,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
   async resolveApproval(approvalKey: string, decision: ApprovalDecision): Promise<void> {
     const pending = this.pendingApprovals.get(approvalKey);
     if (!pending) throw new Error(`未找到 Codex app-server 审批请求: ${approvalKey}`);
-    await pending.resolve(decision);
+    const resolvedDecision = normalizeApprovalDecision(pending.approval, decision);
+    if (!resolvedDecision) throw new Error(unsupportedApprovalDecisionText(pending.approval, decision));
+    await pending.resolve(resolvedDecision);
     this.pendingApprovals.delete(approvalKey);
   }
 
@@ -967,6 +970,19 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const adapterApprovalId = String(request.id);
     const turnId = approval.turnId;
     const sessionId = this.sessionStore.resolveThreadSession(approval.sessionId);
+    if (approval.kind === "terminal_input" && !approval.command?.trim()) {
+      this.writeMessage({
+        id: request.id,
+        result: responseForApprovalDecision(request.method, params, "cancel"),
+      });
+      this.emitProgressNotice({
+        sessionId,
+        turnId,
+        kind: "other",
+        text: "Codex 请求向终端输入内容，但未提供可安全展示的输入；Chat-Codex 已取消该请求。",
+      });
+      return;
+    }
     this.turns.get(turnId) ?? this.turns.createBackgroundTurn(sessionId, turnId);
     const stored = this.sessionStore.get(sessionId);
     if (stored) {
@@ -979,6 +995,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       requestId: request.id,
       sessionId,
       turnId,
+      approval,
       params,
       resolve: async (decision) => {
         this.writeMessage({

@@ -106,6 +106,46 @@ test("BridgeDelivery falls back to text when an approval card cannot be sent", a
   assert.match(sentTexts[0] ?? "", /Codex 请求审批/);
 });
 
+test("BridgeDelivery sends terminal-input approvals through shared text instead of a legacy card", async () => {
+  const approvals = new ApprovalManager();
+  const pending = approvals.create("route", "user", {
+    kind: "terminal_input",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    itemId: "command-item-1",
+    command: "write_stdin --session-id 42 'confirm\\n'",
+    availableDecisions: ["approve", "cancel"],
+  });
+  const sentTexts: string[] = [];
+  let cardAttempts = 0;
+  const delivery = new BridgeDelivery({
+    channels: {
+      get: () => ({ sendApprovalRequest: async () => undefined }),
+      sendApprovalRequest: async () => {
+        cardAttempts += 1;
+        return { channelId: "mock", messageId: "card-1", deliveredAt: new Date().toISOString() };
+      },
+      sendText: async (_target: ChannelTarget, text: string) => {
+        sentTexts.push(text);
+        return { channelId: "mock", messageId: "text-1", deliveredAt: new Date().toISOString() };
+      },
+    } as unknown as ChannelRegistry,
+    approvals,
+    logger: new SilentLogger(),
+    approvalSendRetryDelayMs: 1,
+  });
+
+  await delivery.sendApprovalUntilDelivered("route", target(), pending);
+
+  assert.equal(cardAttempts, 0);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /Codex 请求终端输入审批/);
+  assert.match(sentTexts[0] ?? "", /write_stdin --session-id 42 'confirm\\n'/);
+  assert.match(sentTexts[0] ?? "", /\/OK 本次允许向终端输入/);
+  assert.match(sentTexts[0] ?? "", /\/NO 取消输入并中止当前任务/);
+  assert.doesNotMatch(sentTexts[0] ?? "", /\/P/);
+});
+
 test("BridgeDelivery suppresses progress briefly after a progress send failure", async () => {
   const fixture = deliveryFixture({ failText: true });
   await fixture.delivery.sendProgressText("route", target(), "progress 1");

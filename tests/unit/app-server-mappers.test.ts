@@ -56,6 +56,7 @@ test("app-server run policy maps permissions to app-server payloads", () => {
 
 test("app-server approval mapper preserves request and decision compatibility", () => {
   assert.equal(approvalKindForMethod("item/commandExecution/requestApproval"), "command");
+  assert.equal(approvalKindForMethod("item/commandExecution/requestApproval", { kind: "writeStdin" }), "terminal_input");
   assert.equal(approvalKindForMethod("applyPatchApproval"), "file_change");
   assert.equal(approvalKindForMethod("item/permissions/requestApproval"), "permissions");
   assert.equal(approvalKindForMethod("unknown"), undefined);
@@ -95,6 +96,57 @@ test("app-server approval mapper preserves request and decision compatibility", 
   assert.equal(approvalFromServerRequest("unknown", "approval-1", {}), undefined);
   assert.equal(riskyCommand("sudo rm -rf /tmp/x"), true);
   assert.equal(riskyCommand("npm test"), false);
+});
+
+test("app-server writeStdin approvals use the terminal-input kind and only allowed decisions", () => {
+  const approval = approvalFromServerRequest("item/commandExecution/requestApproval", "stdin-request-1", {
+    kind: "writeStdin",
+    threadId: "thread-1",
+    turnId: "turn-2",
+    itemId: "command-item-1",
+    approvalId: "opaque-stdin-callback-id",
+    command: "write_stdin --session-id 42 'confirm\\n'",
+    cwd: "/repo",
+    reason: "程序正在等待确认",
+    availableDecisions: ["accept", "cancel"],
+  });
+
+  assert.deepEqual(approval, {
+    kind: "terminal_input",
+    adapterApprovalId: "stdin-request-1",
+    sessionId: "thread-1",
+    turnId: "turn-2",
+    itemId: "command-item-1",
+    command: "write_stdin --session-id 42 'confirm\\n'",
+    cwd: "/repo",
+    reason: "程序正在等待确认",
+    risk: undefined,
+    availableDecisions: ["approve", "cancel"],
+    raw: {
+      kind: "writeStdin",
+      threadId: "thread-1",
+      turnId: "turn-2",
+      itemId: "command-item-1",
+      approvalId: "opaque-stdin-callback-id",
+      command: "write_stdin --session-id 42 'confirm\\n'",
+      cwd: "/repo",
+      reason: "程序正在等待确认",
+      availableDecisions: ["accept", "cancel"],
+    },
+  });
+  assert.deepEqual(responseForApprovalDecision("item/commandExecution/requestApproval", {}, "cancel"), { decision: "cancel" });
+});
+
+test("app-server writeStdin approval safely falls back to accept and cancel for transition servers", () => {
+  const approval = approvalFromServerRequest("item/commandExecution/requestApproval", "stdin-request-2", {
+    kind: "writeStdin",
+    threadId: "thread-1",
+    turnId: "turn-2",
+    itemId: "command-item-1",
+    command: "write_stdin --session-id 42 'y\\n'",
+  });
+
+  assert.deepEqual(approval?.availableDecisions, ["approve", "cancel"]);
 });
 
 test("app-server command approvals retain all fields needed by a channel card", () => {

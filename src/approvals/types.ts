@@ -1,4 +1,4 @@
-export type ApprovalKind = "command" | "file_change" | "permissions" | "network" | "legacy_exec" | "legacy_patch";
+export type ApprovalKind = "command" | "terminal_input" | "file_change" | "permissions" | "network" | "legacy_exec" | "legacy_patch";
 
 export type ApprovalDecision = "approve" | "approve-session" | "deny" | "cancel";
 

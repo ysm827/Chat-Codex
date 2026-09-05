@@ -126,3 +126,26 @@ test("ApprovalManager resolves pending approvals by adapter request id", () => {
   assert.equal(manager.list("route-a").length, 0);
   assert.equal(manager.list("route-b").length, 1);
 });
+
+test("ApprovalManager renders terminal input approvals without session approval and escapes controls", () => {
+  const manager = new ApprovalManager();
+  const pending = manager.create("route-a", "user", {
+    kind: "terminal_input",
+    sessionId: "s1",
+    turnId: "t1",
+    itemId: "command-item-1",
+    command: "write_stdin --session-id 42 confirm\n",
+    reason: "程序正在等待确认",
+    availableDecisions: ["approve", "cancel"],
+  });
+
+  const text = manager.formatForChannel(pending);
+  assert.match(text, /Codex 请求终端输入审批/);
+  assert.match(text, /不会启动新命令/);
+  assert.match(text, /write_stdin --session-id 42 confirm\\n/);
+  assert.match(text, /\/OK 本次允许向终端输入/);
+  assert.match(text, /\/NO 取消输入并中止当前任务/);
+  assert.doesNotMatch(text, /\/P/);
+  assert.throws(() => manager.decide(pending.approvalKey, pending.routeKey, "approve-session"), /不支持/);
+  assert.equal(manager.get(pending.approvalKey)?.status, "pending");
+});
