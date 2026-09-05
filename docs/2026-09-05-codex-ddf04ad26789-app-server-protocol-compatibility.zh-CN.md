@@ -1,8 +1,14 @@
-# Codex app-server 最新协议适配清单（第一轮：只看协议）
+# Codex app-server 协议适配清单（第一轮：只看协议）
 
-状态：已完成源码比对和适配分级；协议项 1（`writeStdin`）的中间件与共享文字兜底已实现，
-mock / fake app-server 自动化测试和全量测试均已通过（517 passed）。
-飞书私聊的专用审批卡片尚未改造；其它协议项的**业务适配**尚未开始实现。
+审计日期：2026-09-05
+Codex 源码基线：`references/openai-codex` @ `ddf04ad26789d040f9ef6a96736f76602e35a6cc`
+
+> 文件名中的 `2026-09-05` 和 `ddf04ad26789` 分别是本轮审计日期与上述 Codex 源码 commit 的短 ID；
+> 它们**不是** Chat-Codex 项目的提交号。
+
+状态：已完成源码比对和适配分级；协议项 1（`writeStdin`）的中间件、官方语义等价的审批内容展示、
+微信文字链路和飞书私聊两按钮审批卡均已实现，并有 mock / fake app-server / fake channel 自动化覆盖。
+真实微信、飞书帐号验证仍待补测；其它协议项的**业务适配**尚未开始实现。
 
 更新：2026-09-05
 
@@ -25,7 +31,7 @@ mock / fake app-server 自动化测试和全量测试均已通过（517 passed�
 当前 Chat-Codex 已经运行时调用 `model/list`，没有硬编码模型名。因此最后的“新模型适配”不是手工维护
 一张模型名字表，而是验证和补齐新版模型返回字段、模型选择、思考程度、service tier 与状态显示的完整链路。
 
-### 1.2 第一项进度：`writeStdin`（中间件已完成，渠道卡片待讨论）
+### 1.2 第一项进度：`writeStdin`（中间件与渠道自动化已完成）
 
 **协议项 1：`item/commandExecution/requestApproval` 的 `kind: "writeStdin"`。**
 
@@ -44,16 +50,43 @@ app-server 下继续正确工作，或在协议清单中明确标为不开放。
 
 #### 本项当前完成边界
 
-本轮已完成的是**中间件优先**的实现：app-server adapter、审批状态、Bridge 命令解析和共享文字审批
-提示都已能正确处理 `writeStdin`。微信本来没有审批卡，因此直接使用该文字提示；飞书群聊也继续使用
-文字兜底。飞书私聊原有的三按钮审批卡暂不复用到此类请求，Bridge 会刻意绕过它并使用同一份文字提示，
-避免把“取消并中止任务”错误显示成普通“拒绝”。
+本轮已完成 app-server adapter、审批状态、Bridge 命令解析和共享文字审批提示。微信没有审批卡 API，
+因此使用文字提示；飞书群聊也继续使用文字兜底。飞书私聊则在通用卡片决策中增加 `cancel`，并按审批类型
+收敛按钮：`terminal_input` 只显示“本次允许 / 取消并中止任务”，普通审批仍保持原来的三按钮。卡片发送失败
+仍自动回退到同一份文字提示，避免把“取消并中止任务”错误显示成普通“拒绝”。
 
-因此，本项已经具备跨渠道可用的正确交互，但**飞书私聊的原生两按钮卡片是下一轮单独讨论的展示增强，
-不是本轮已经完成的内容**。
+因此，本项的本地自动化实现已经完成；真实帐号上的微信文字交互和飞书 `card.action.trigger` 回调仍是渠道
+验收，不把 fake 测试冒充成真实验证。
 
 本次实现和测试记录见
 [`reports/tests/2026-09-05-codex-writestdin-middleware-adaptation.md`](../reports/tests/2026-09-05-codex-writestdin-middleware-adaptation.md)。
+飞书卡片和微信文字链路的后续实现记录见
+[`reports/tests/2026-09-05-feishu-terminal-input-approval-card.md`](../reports/tests/2026-09-05-feishu-terminal-input-approval-card.md)。
+
+### 1.3 审批内容展示：对齐 Codex 核心语义，而不是复制按钮外观
+
+这里的“像官方 Codex 一样展示”特指**用户在批准前能看见什么操作会发生**，不是指把终端 TUI 的按钮、
+快捷键或 `/OK` 卡片逐像素搬到渠道中。
+
+项目内 Codex 源码 `codex-rs/tui/src/bottom_pane/approval_overlay.rs` 的当前逻辑是：
+
+- 普通命令审批展示 `Environment`、`Reason` 和完整命令；
+- `writeStdin` 审批展示目标 terminal id，以及带引号、控制字符可见的 `Input`；它不把 stdin 输入伪装成一条
+  新命令。
+
+Chat-Codex 已按同一语义投递到微信文字、飞书私聊卡片、飞书/卡片失败后的文字回退，以及 `/status` 的待审批
+摘要中：
+
+| Codex 审批种类 | 渠道中实际展示的核心内容 |
+| --- | --- |
+| 普通 `command` | 执行环境（server 提供时）、原因、**将执行的完整命令**、CWD |
+| `writeStdin` | 执行环境（server 提供时）、原因、**目标终端**、**将输入的精确文本**、CWD；明确“不启动新命令” |
+
+`writeStdin` 的协议只有一个 canonical `command` 字符串。当前中间件只接受官方当前使用的
+`write_stdin --session-id <id> <input>` 四参数表示，将其恢复为终端 id 和原始输入；输入以 JSON 风格带引号
+显示，因此换行、制表符、NUL 等不会在渠道中变成不可见内容或额外聊天指令。若未来 server 发送了无法按该
+格式安全恢复的字符串，渠道会显示**完整、已转义的原始终端输入请求**，不会编造“输入了什么”；只有连
+可展示的 `command` 都缺失时才会 fail closed 为 `cancel`。
 
 ## 2. 证据和基线
 
@@ -315,9 +348,10 @@ availableDecisions: [accept, cancel]
 write_stdin --session-id 42 'confirm\\n'
 ```
 
-也就是说，正常的新版 stdin 审批中，用户应当能看见将向终端写入的内容；Chat-Codex 现有
-`approvalFromServerRequest()` 也已经会保存并展示 `params.command`。不能把一个没有可展示操作的
-stdin 请求做成可盲批的 `/OK`。
+也就是说，正常的新版 stdin 审批中，用户应当能看见将向终端写入的内容。官方 TUI 不直接把这条 protocol
+字符串作为“命令”展示：它将第 3 个参数作为 terminal id、最后一个参数作为 `Input`。Chat-Codex 现在也会
+在 `approvalFromServerRequest()` 中保留 `environmentId`，并从官方这条四参数 canonical 表示恢复
+`terminalId` 和 `terminalInput`；不能把一个没有可展示操作的 stdin 请求做成可盲批的 `/OK`。
 
 #### 本轮已完成的中间件改动
 
@@ -328,18 +362,21 @@ stdin 请求做成可盲批的 `/OK`。
 4. `terminal_input` 的可用 decision 是 server 给出的 `accept/cancel`；过渡 server 缺该字段时也仅回退为
    `approve/cancel`。`/OK` 回传 `accept`；聊天用户发送 `/NO` 时中间件转换为 `cancel`；`/P` 会返回
    “不支持本会话通过”且 pending approval 保持未处理。
-5. 共享文字提示明确写“终端输入（不会启动新命令）”，显示将写入的完整操作、原因和工作目录；换行、制表符
-   和其它控制字符会安全转义为可见文字。
-6. 若 `writeStdin` 缺少可安全展示的 `command`，adapter 立即以 `cancel` 关闭请求并发出可见进度提示，
-   不创建可盲批的 pending approval。
+5. 普通命令审批会展示执行环境、原因、**将执行的完整命令**和工作目录；`terminal_input` 会展示执行环境、
+   原因、**目标终端**、**输入**和工作目录。终端输入采用带引号的可见表示，例如 `"confirm\\n"`，不把 stdin
+   伪装成一条新命令。
+6. 字符串无法按四参数格式恢复时，仍显示完整、已转义的原始终端输入请求；若 `writeStdin` 连可安全展示的
+   `command` 都缺少，adapter 才立即以 `cancel` 关闭请求并发出可见进度提示，不创建可盲批的 pending approval。
 7. approval resolver 不改变关联 command item 的 running/completed 状态；仍只等待 app-server 后续真实
    `item/*` 和 `turn/*` 生命周期通知。
 
 也就是说，用户不用学习新命令，但必须看得见操作。例如：
 
 ```text
-Codex 请求向正在运行的终端输入内容
-输入操作：write_stdin --session-id 42 'confirm\\n'
+Codex 请求终端输入审批
+执行环境：remote
+目标终端：42
+输入："confirm\\n"
 原因：将确认一个破坏性操作
 
 /OK 本次允许   /NO 拒绝并中止当前任务
@@ -358,14 +395,14 @@ Chat-Codex adapter / Bridge Core
   识别 kind、校验可用决定、保存 pending approval、用 requestId 回传
           ↓
 各渠道 renderer
-  让用户看见“终端输入”及完整操作，并提供当前允许的操作
+  让用户看见“终端输入”的目标终端和精确输入，并提供当前允许的操作
 ```
 
 | 层 / 渠道 | 本轮实际状态 |
 | --- | --- |
-| 中间件核心 | **已完成**：增加 `terminal_input`，保存可用 decision，`/OK` → `accept`、`/NO` → `cancel`、拒绝 `/P`，且不把原 command item 标为已结束 |
-| 微信 | **已可用**：没有审批卡 API，自动使用已完成的共享文字提示，显示完整操作与 `/OK`、`/NO`，不出现 `/P` |
-| 飞书私聊 | **正确兜底已完成，原生卡片待下一轮**：Bridge 对 `terminal_input` 刻意跳过旧三按钮卡，改发共享文字；下一轮再把卡片做成“本次允许 / 取消并中止任务”两个按钮 |
+| 中间件核心 | **已完成**：增加 `terminal_input`，保留 `environmentId`，恢复 terminal id/input，保存可用 decision，`/OK` → `accept`、`/NO` → `cancel`、拒绝 `/P`，且不把原 command item 标为已结束 |
+| 微信 | **已可用**：没有审批卡 API，自动使用共享文字提示，显示终端、输入和 `/OK`、`/NO`，不出现 `/P` |
+| 飞书私聊 | **已完成**：`terminal_input` 显示目标终端、输入以及“本次允许 / 取消并中止任务”两个按钮；普通审批仍为旧三按钮；卡片失败时回退文字提示 |
 | 飞书群聊 | **已可用**：审批卡本来不支持群聊，继续走共享文字兜底，沿用现有 route/发起人权限校验 |
 | 未来渠道 | 无卡片能力时可复用共享文字审批；新增卡片能力时必须根据 server 的决定集动态渲染，不能假设 `/P` 恒可用 |
 
@@ -549,7 +586,7 @@ node --test --test-name-pattern='protocol inventory' dist/tests/unit/app-server-
 | 新版 schema inventory | 20 个新增方法/通知均有明确分类 |
 | 旧 server 审批 | **已覆盖**：缺 `kind` 时仍按普通 command，`/OK /P /NO` 不变 |
 | `writeStdin` 决定集 | **已覆盖**：当前源码只能 `accept` / `cancel`；不展示/接受 `/P`，`/NO` 明确为“拒绝并中止任务” |
-| 各渠道审批展示 | **共享文字兜底已覆盖**：微信、飞书私聊和飞书群聊均使用正确文字提示；飞书私聊原生两按钮卡片待下一轮 |
+| 各渠道审批展示 | **已覆盖**：微信文字提示、飞书群聊文字兜底、飞书私聊终端输入两按钮卡片；普通飞书审批仍保持三按钮 |
 | `writeStdin` 生命周期 | **本轮实现边界已固定**：approval resolver 不直接改 parent item；后续真实 item/turn 事件才是生命周期依据，后续可补真实 CLI 场景测试 |
 | `isBlocking` | `true` 保留 `/a数字`；`false` 不被误写成已支持的阻塞流程 |
 | 刷新分页 | 新 server 使用分页；旧 server 正确 fallback；只取需要的最新回复 |
@@ -557,14 +594,13 @@ node --test --test-name-pattern='protocol inventory' dist/tests/unit/app-server-
 | async agent message | 执行中消息即时投递、不结束 turn；用户普通回复走 `turn/steer`；最终答复只投递一次 |
 | image generation failure | 有 `failure` 时不发“媒体生成完成”；无 `failure` 时保持现有提示 |
 
-本轮已执行 `npm test`：**517 passed / 0 failed**；详细环境、覆盖用例和待真实渠道补测项见上方测试报告。
+本轮完整测试结果见测试报告；详细环境、覆盖用例和待真实渠道补测项见上方链接。
 
 ## 12. 下一轮讨论顺序
 
 协议部分建议按下面顺序逐项确认，不混入模型或新产品能力：
 
-1. **先补完协议项 1 的飞书私聊展示讨论**：是否把现有卡片扩展为 `terminal_input` 专用的两个按钮
-   “本次允许 / 取消并中止任务”。这只改渠道 renderer 与卡片回调类型，不改已完成的中间件 decision 语义。
+1. 使用真实微信、飞书私聊完成本项的渠道验收；限制、账号、会话形态和结果追加到测试报告。
 2. 协议项 2：`isBlocking` 输入的聊天行为。
 3. 协议项 3：已有 `/context-refresh reload` 的分页迁移。
 4. 协议项 4：async Agent 消息的投递格式和普通回复 steer 边界。

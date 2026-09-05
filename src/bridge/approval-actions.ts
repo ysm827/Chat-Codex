@@ -1,4 +1,5 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
+import { channelApprovalRequestFromPending } from "../approvals/channel-approval.js";
 import type { CodexAdapter } from "../codex/types.js";
 import type { ChannelApprovalAction, ChannelApprovalActionResult } from "../protocol/channel.js";
 import { resolveApproval } from "./approval-resolution.js";
@@ -26,7 +27,7 @@ export async function handleChannelApprovalAction(
   if (pending.requestedBy !== message.sender.id) {
     return { status: "rejected", text: "只有发起该审批的用户可以处理。" };
   }
-  if (pending.availableDecisions && !pending.availableDecisions.includes(action.decision)) {
+  if (!channelApprovalRequestFromPending(pending).availableDecisions.includes(action.decision)) {
     return { status: "rejected", text: "该审批不支持此处理方式。" };
   }
   const result = await resolveApproval(options, {

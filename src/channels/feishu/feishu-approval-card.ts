@@ -3,6 +3,7 @@ import type {
   ChannelApprovalDecision,
   ChannelApprovalRequest,
 } from "../../protocol/channel.js";
+import { formatTerminalInputForDisplay } from "../../approvals/approval-policy.js";
 import { isChannelApprovalDecision } from "../../protocol/channel.js";
 import type { FeishuCardActionTriggerEvent } from "./feishu-types.js";
 
@@ -29,14 +30,14 @@ export interface FeishuApprovalCardCallback {
 }
 
 export function buildFeishuApprovalCard(request: ChannelApprovalRequest): Record<string, unknown> {
-  const actions = request.availableDecisions.map((decision) => approvalButton(request.approvalKey, decision));
+  const actions = request.availableDecisions.map((decision) => approvalButton(request, decision));
   if (actions.length === 0) {
     throw new Error("飞书审批卡片没有可用处理方式");
   }
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: "plain_text", content: "Codex 请求审批" },
+      title: { tag: "plain_text", content: approvalCardTitle(request) },
       template: approvalRiskTemplate(request.risk),
     },
     elements: [
@@ -55,7 +56,7 @@ export function buildFeishuApprovalCard(request: ChannelApprovalRequest): Record
         tag: "note",
         elements: [{
           tag: "plain_text",
-          content: "也可直接发送 /OK、/P 或 /NO。",
+          content: approvalTextCommandHint(request),
         }],
       },
     ],
@@ -117,7 +118,7 @@ export function buildFeishuApprovalResultCard(
   return {
     config: { wide_screen_mode: true },
     header: {
-      title: { tag: "plain_text", content: approvalResultTitle(result.decision) },
+      title: { tag: "plain_text", content: approvalResultTitle(request, result.decision) },
       template: approvalDecisionTemplate(result.decision),
     },
     elements: [{
@@ -130,8 +131,8 @@ export function buildFeishuApprovalResultCard(
   };
 }
 
-function approvalButton(approvalKey: string, decision: ChannelApprovalDecision): Record<string, unknown> {
-  const presentation = approvalDecisionPresentation(decision);
+function approvalButton(request: ChannelApprovalRequest, decision: ChannelApprovalDecision): Record<string, unknown> {
+  const presentation = approvalDecisionPresentation(request, decision);
   return {
     tag: "button",
     text: { tag: "plain_text", content: presentation.label },
@@ -139,20 +140,36 @@ function approvalButton(approvalKey: string, decision: ChannelApprovalDecision):
     name: FEISHU_APPROVAL_CARD_ACTION,
     value: {
       action: FEISHU_APPROVAL_CARD_ACTION,
-      approvalKey,
+      approvalKey: request.approvalKey,
       decision,
     },
   };
 }
 
 function approvalCardBody(request: ChannelApprovalRequest): string {
+  if (request.kind === "terminal_input") {
+    const lines = [
+      requiredApprovalLine("类型", approvalKindForCard(request)),
+      optionalApprovalLine("执行环境", request.environmentId),
+      optionalApprovalLine("原因", request.reason),
+      optionalApprovalLine("目标终端", request.terminalId),
+      optionalApprovalLine("输入", terminalInputForCard(request)),
+      ...terminalInputFallbackLine(request),
+      optionalApprovalLine("CWD", request.cwd),
+      requiredApprovalLine("会话", shortId(request.sessionId)),
+      requiredApprovalLine("Turn", shortId(request.turnId)),
+      optionalApprovalLine("风险", request.risk),
+    ];
+    return lines.filter((line): line is string => Boolean(line)).join("\n");
+  }
   const lines = [
     requiredApprovalLine("类型", request.kind),
+    optionalApprovalLine("执行环境", request.environmentId),
+    optionalApprovalLine("原因", request.reason),
+    optionalApprovalLine("将执行的命令", request.command),
+    optionalApprovalLine("CWD", request.cwd),
     requiredApprovalLine("会话", shortId(request.sessionId)),
     requiredApprovalLine("Turn", shortId(request.turnId)),
-    optionalApprovalLine("CWD", request.cwd),
-    optionalApprovalLine("命令", request.command),
-    optionalApprovalLine("原因", request.reason),
     optionalApprovalLine("风险", request.risk),
   ];
   return lines.filter((line): line is string => Boolean(line)).join("\n");
@@ -164,23 +181,29 @@ function approvalResultBody(
 ): string {
   return [
     normalizedPlainText(result.text) ?? "审批已处理。",
-    requiredApprovalLine("类型", request.kind),
+    requiredApprovalLine("类型", approvalKindForCard(request)),
     requiredApprovalLine("会话", shortId(request.sessionId)),
   ].join("\n");
 }
 
-function approvalDecisionPresentation(decision: ChannelApprovalDecision): {
+function approvalDecisionPresentation(request: ChannelApprovalRequest, decision: ChannelApprovalDecision): {
   label: string;
   type: "primary" | "default" | "danger";
 } {
-  if (decision === "approve") return { label: "通过一次", type: "primary" };
+  if (decision === "approve") {
+    return { label: request.kind === "terminal_input" ? "本次允许" : "通过一次", type: "primary" };
+  }
   if (decision === "approve-session") return { label: "本会话通过", type: "default" };
+  if (decision === "cancel") return { label: "取消并中止任务", type: "danger" };
   return { label: "拒绝", type: "danger" };
 }
 
-function approvalResultTitle(decision: ChannelApprovalDecision): string {
+function approvalResultTitle(request: ChannelApprovalRequest, decision: ChannelApprovalDecision): string {
+  if (request.kind === "terminal_input" && decision === "approve") return "Codex 终端输入已允许";
+  if (request.kind === "terminal_input" && decision === "cancel") return "Codex 终端输入已取消";
   if (decision === "approve") return "Codex 审批已通过";
   if (decision === "approve-session") return "Codex 审批已本会话通过";
+  if (decision === "cancel") return "Codex 审批已取消";
   return "Codex 审批已拒绝";
 }
 
@@ -191,7 +214,30 @@ function approvalRiskTemplate(risk: ChannelApprovalRequest["risk"]): string {
 }
 
 function approvalDecisionTemplate(decision: ChannelApprovalDecision): string {
-  return decision === "deny" ? "red" : "green";
+  return decision === "deny" || decision === "cancel" ? "red" : "green";
+}
+
+function approvalCardTitle(request: ChannelApprovalRequest): string {
+  return request.kind === "terminal_input" ? "Codex 请求终端输入审批" : "Codex 请求审批";
+}
+
+function approvalTextCommandHint(request: ChannelApprovalRequest): string {
+  return request.kind === "terminal_input"
+    ? "也可直接发送 /OK 或 /NO。"
+    : "也可直接发送 /OK、/P 或 /NO。";
+}
+
+function approvalKindForCard(request: ChannelApprovalRequest): string {
+  return request.kind === "terminal_input" ? "终端输入（不会启动新命令）" : request.kind;
+}
+
+function terminalInputForCard(request: ChannelApprovalRequest): string | undefined {
+  return request.terminalInput === undefined ? undefined : formatTerminalInputForDisplay(request.terminalInput);
+}
+
+function terminalInputFallbackLine(request: ChannelApprovalRequest): Array<string | undefined> {
+  if (request.terminalId && request.terminalInput !== undefined) return [];
+  return [optionalApprovalLine("原始终端输入请求", request.command)];
 }
 
 function actionValue(value: unknown): Record<string, unknown> | undefined {

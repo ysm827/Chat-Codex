@@ -56,6 +56,33 @@ class FeishuManyCommentaryCodexAdapter extends MockCodexAdapter {
   }
 }
 
+class FeishuTerminalInputCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = "feishu-terminal-input-turn-1";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "approval.requested",
+      sessionId,
+      turnId,
+      approval: {
+        kind: "terminal_input",
+        adapterApprovalId: "stdin-server-request-1",
+        sessionId,
+        turnId,
+        itemId: "original-command-item-1",
+        command: "write_stdin --session-id 42 'confirm\n'",
+        environmentId: "remote",
+        cwd: "/workspace/project",
+        reason: "程序正在等待确认",
+        terminalId: "42",
+        terminalInput: "confirm\n",
+        availableDecisions: ["approve", "cancel"],
+      },
+    };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
 const credentials = {
   appId: "cli_1234567890abcdef",
   appSecret: "test-secret",
@@ -306,6 +333,72 @@ test("Feishu private approval card resolves through the shared Bridge approval f
   assert.match(response.toast?.content ?? "", /已通过/);
   assert.equal(response.card?.type, "raw");
   await bridge.stop();
+});
+
+test("Feishu terminal-input approval card reaches the shared Bridge with accept and cancel", async () => {
+  for (const expectedDecision of ["approve", "cancel"] as const) {
+    const factory = new FakeFeishuTransportFactory();
+    const codex = new FeishuTerminalInputCodexAdapter();
+    const channel = new FeishuAdapter({ ...credentials, transportFactory: factory });
+    const bridge = new Bridge({
+      channel,
+      codex,
+      logger: new SilentLogger(),
+      cwd: process.cwd(),
+    });
+
+    await bridge.start();
+    await factory.dispatcher.emitReceive(feishuInbound(`触发终端输入 ${expectedDecision}`, `om_terminal_${expectedDecision}`));
+    await bridge.waitForIdle();
+
+    const cardPayload = factory.client.replyPayloads.find((payload) => payload.data.msg_type === "interactive");
+    assert.ok(cardPayload, "terminal input approval should be sent as an interactive card");
+    const card = JSON.parse(cardPayload.data.content) as {
+      header?: { title?: { content?: string } };
+      elements: Array<{
+        tag?: string;
+        text?: { content?: string };
+        actions?: Array<{ text: { content: string }; value: Record<string, unknown> }>;
+      }>;
+    };
+    const details = card.elements.find((element) => element.tag === "div")?.text?.content;
+    const actions = card.elements.find((element) => element.tag === "action")?.actions ?? [];
+    const selectedAction = actions.find((action) => action.value.decision === expectedDecision);
+
+    assert.equal(card.header?.title?.content, "Codex 请求终端输入审批");
+    assert.match(details ?? "", /类型：终端输入（不会启动新命令）/);
+    assert.match(details ?? "", /执行环境：remote/);
+    assert.match(details ?? "", /目标终端：42/);
+    assert.match(details ?? "", /输入："confirm\\n"/);
+    assert.doesNotMatch(details ?? "", /write_stdin/);
+    assert.deepEqual(actions.map((action) => action.text.content), ["本次允许", "取消并中止任务"]);
+    assert.ok(selectedAction);
+
+    const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+      app_id: credentials.appId,
+      context: { open_message_id: "om_reply", open_chat_id: "oc_private" },
+      operator: { open_id: "ou_user" },
+      action: { value: selectedAction?.value },
+    })) as {
+      toast?: { type?: string; content?: string };
+      card?: { type?: string; data?: { header?: { title?: { content?: string } } } };
+    };
+
+    assert.deepEqual(codex.resolvedApprovals, [{
+      approvalKey: "stdin-server-request-1",
+      decision: expectedDecision,
+    }]);
+    assert.equal(response.toast?.type, "success");
+    assert.equal(response.card?.type, "raw");
+    assert.equal(
+      response.card?.data?.header?.title?.content,
+      expectedDecision === "approve" ? "Codex 终端输入已允许" : "Codex 终端输入已取消",
+    );
+    if (expectedDecision === "cancel") {
+      assert.match(response.toast?.content ?? "", /已取消本次终端输入，Codex 将中止当前任务/);
+    }
+    await bridge.stop();
+  }
 });
 
 function feishuInbound(text: string, messageId: string) {

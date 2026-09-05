@@ -9,8 +9,14 @@ export interface ApprovalRequest {
   turnId: string;
   itemId: string;
   command?: string;
+  /** Codex execution environment identifier, when app-server provides one. */
+  environmentId?: string;
   cwd?: string;
   reason?: string;
+  /** Target terminal for a `terminal_input` approval, normalized from Codex's request. */
+  terminalId?: string;
+  /** Exact input that Codex proposes to write to that existing terminal. */
+  terminalInput?: string;
   risk?: "low" | "medium" | "high" | "unknown";
   availableDecisions?: ApprovalDecision[];
   raw?: unknown;

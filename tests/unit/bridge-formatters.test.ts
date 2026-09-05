@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { PendingApproval } from "../../src/approvals/types.js";
 import type { CodexModelOption } from "../../src/codex/types.js";
 import type { QueuedSteer, SessionChoice } from "../../src/bridge/bridge-types.js";
 import {
   composeFinalAnswer,
   composeSteerBatchInput,
   formatApprovalKindForUser,
+  formatPendingApprovalStatus,
   formatGoalStatus,
   formatGoalStatusLines,
   formatGoalTimestamp,
@@ -73,6 +75,32 @@ test("bridge formatters preserve status labels and local goal time", () => {
   assert.equal(formatGoalTimestamp(1700000000, { timeZone: "Asia/Shanghai" }), "2023-11-15 06:13:20（Asia/Shanghai）");
   assert.equal(formatGoalTimestamp(1700000000, { timeZone: "UTC" }), "2023-11-14 22:13:20（UTC）");
   assert.equal(formatGoalTimestamp(0, { timeZone: "UTC" }), "未知");
+});
+
+test("bridge status renders terminal-input approvals as terminal plus exact input, not a new command", () => {
+  const approval: PendingApproval = {
+    approvalKey: "a001",
+    routeKey: "mock:default:direct:user",
+    requestedBy: "user",
+    requestedAt: "2026-09-05T00:00:00.000Z",
+    status: "pending",
+    kind: "terminal_input",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    command: "write_stdin --session-id 42 'confirm\n'",
+    environmentId: "remote",
+    terminalId: "42",
+    terminalInput: "confirm\n",
+    reason: "程序正在等待确认",
+    availableDecisions: ["approve", "cancel"],
+  };
+
+  const text = formatPendingApprovalStatus(approval).filter((line): line is string => Boolean(line)).join("\n");
+  assert.match(text, /执行环境: remote/);
+  assert.match(text, /目标终端: 42/);
+  assert.match(text, /输入: "confirm\\n"/);
+  assert.doesNotMatch(text, /write_stdin/);
 });
 
 test("bridge formatters render session choices and final answers", () => {

@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Bridge } from "../../src/bridge/bridge.js";
 import { FileWeixinAccountStore } from "../../src/channels/weixin/weixin-account-store.js";
-import { WeixinAdapter } from "../../src/channels/weixin/weixin-adapter.js";
+import { WeixinAdapter, weixinMessageToChannelMessage } from "../../src/channels/weixin/weixin-adapter.js";
 import { WeixinApiClient, type FetchLike } from "../../src/channels/weixin/weixin-api.js";
+import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
+import type { CodexEvent } from "../../src/codex/types.js";
+import { SilentLogger } from "../../src/logging/logger.js";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -30,6 +34,33 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+class WeixinTerminalInputCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = "weixin-terminal-input-turn-1";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "approval.requested",
+      sessionId,
+      turnId,
+      approval: {
+        kind: "terminal_input",
+        adapterApprovalId: "stdin-server-request-1",
+        sessionId,
+        turnId,
+        itemId: "original-command-item-1",
+        command: "write_stdin --session-id 42 'confirm\n'",
+        environmentId: "remote",
+        cwd: "/workspace/project",
+        reason: "程序正在等待确认",
+        terminalId: "42",
+        terminalInput: "confirm\n",
+        availableDecisions: ["approve", "cancel"],
+      },
+    };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
 }
 
 test("WeixinAdapter delivery policy disables realtime progress", () => {
@@ -204,6 +235,81 @@ test("WeixinAdapter sends text messages with context token and run id", async ()
   assert.equal(body.msg.run_id, "run-1");
   assert.equal(body.msg.item_list[0].text_item.text, "hello");
   assert.equal(result.channelId, "weixin");
+});
+
+test("WeixinAdapter delivers terminal-input approval text and routes /NO to cancel", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  const outboundBodies: Array<{ msg?: { item_list?: Array<{ text_item?: { text?: string } }> } }> = [];
+  const fetchImpl: FetchLike = async (input, init) => {
+    const url = String(input);
+    if (url.includes("sendmessage")) {
+      outboundBodies.push(JSON.parse(String(init?.body ?? "{}")));
+      return jsonResponse({});
+    }
+    if (url.includes("notifystop")) return jsonResponse({});
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const channel = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    pollOnStart: false,
+    outboundMinIntervalMs: 0,
+    outboundMaxRetries: 0,
+    apiOptions: { fetch: fetchImpl },
+  });
+  const codex = new WeixinTerminalInputCodexAdapter();
+  const bridge = new Bridge({
+    channel,
+    codex,
+    logger: new SilentLogger(),
+    cwd: process.cwd(),
+  });
+
+  const inbound = (text: string, messageId: number) => weixinMessageToChannelMessage("weixin", "abc-im-bot", {
+    message_id: messageId,
+    from_user_id: "user@im.wechat",
+    context_token: "ctx-1",
+    item_list: [{ type: 1, text_item: { text } }],
+  });
+  const sentTexts = (): string[] => outboundBodies.flatMap((body) => body.msg?.item_list ?? [])
+    .flatMap((item) => item.text_item?.text ? [item.text_item.text] : []);
+
+  await bridge.start();
+  try {
+    await bridge.handleMessage(inbound("触发终端输入审批", 1));
+    await bridge.waitForIdle();
+
+    const approvalText = sentTexts().find((text) => text.includes("Codex 请求终端输入审批")) ?? "";
+    assert.match(approvalText, /不会启动新命令/);
+    assert.match(approvalText, /执行环境: remote/);
+    assert.match(approvalText, /目标终端: 42/);
+    assert.match(approvalText, /输入: "confirm\\n"/);
+    assert.doesNotMatch(approvalText, /write_stdin/);
+    assert.match(approvalText, /\/OK 本次允许向终端输入/);
+    assert.match(approvalText, /\/NO 取消输入并中止当前任务/);
+    assert.doesNotMatch(approvalText, /\/P/);
+
+    await bridge.handleMessage(inbound("/P", 2));
+    assert.equal(codex.resolvedApprovals.length, 0);
+    assert.ok(sentTexts().some((text) => text.includes("不支持 /P 本会话通过")));
+
+    await bridge.handleMessage(inbound("/NO", 3));
+    await bridge.waitForIdle();
+
+    assert.deepEqual(codex.resolvedApprovals, [{
+      approvalKey: "stdin-server-request-1",
+      decision: "cancel",
+    }]);
+    assert.ok(sentTexts().some((text) => text.includes("已取消本次终端输入，Codex 将中止当前任务")));
+  } finally {
+    await bridge.stop();
+  }
 });
 
 test("WeixinAdapter sends structured tool progress with context token and run id", async () => {

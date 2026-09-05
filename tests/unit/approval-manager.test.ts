@@ -26,6 +26,25 @@ test("ApprovalManager creates and resolves approvals", () => {
   assert.equal(resolved.decision, "approve");
 });
 
+test("ApprovalManager keeps every character of a multiline command visible in the approval prompt", () => {
+  const manager = new ApprovalManager();
+  const pending = manager.create("route-a", "user", {
+    kind: "command",
+    sessionId: "s1",
+    turnId: "t1",
+    itemId: "i1",
+    command: "printf 'first\\nsecond'\nrm -rf /tmp/example",
+    environmentId: "remote",
+    reason: "需要运行两步检查",
+  });
+
+  const text = manager.formatForChannel(pending);
+  assert.match(text, /执行环境: remote/);
+  assert.match(text, /原因: 需要运行两步检查/);
+  assert.match(text, /将执行的命令:/);
+  assert.match(text, /printf 'first\\nsecond'\\nrm -rf \/tmp\/example/);
+});
+
 test("ApprovalManager only expires approvals when ttl is configured", () => {
   const manager = new ApprovalManager({ ttlMs: -1 });
   const pending = manager.create("route-a", "user", {
@@ -127,7 +146,7 @@ test("ApprovalManager resolves pending approvals by adapter request id", () => {
   assert.equal(manager.list("route-b").length, 1);
 });
 
-test("ApprovalManager renders terminal input approvals without session approval and escapes controls", () => {
+test("ApprovalManager renders terminal input approvals with the same terminal-and-input semantics as Codex", () => {
   const manager = new ApprovalManager();
   const pending = manager.create("route-a", "user", {
     kind: "terminal_input",
@@ -135,14 +154,21 @@ test("ApprovalManager renders terminal input approvals without session approval 
     turnId: "t1",
     itemId: "command-item-1",
     command: "write_stdin --session-id 42 confirm\n",
+    environmentId: "remote",
     reason: "程序正在等待确认",
+    terminalId: "42",
+    terminalInput: "confirm\n\t\u0000",
     availableDecisions: ["approve", "cancel"],
   });
 
   const text = manager.formatForChannel(pending);
   assert.match(text, /Codex 请求终端输入审批/);
   assert.match(text, /不会启动新命令/);
-  assert.match(text, /write_stdin --session-id 42 confirm\\n/);
+  assert.match(text, /执行环境: remote/);
+  assert.match(text, /原因: 程序正在等待确认/);
+  assert.match(text, /目标终端: 42/);
+  assert.match(text, /输入: "confirm\\n\\t\\u0000"/);
+  assert.doesNotMatch(text, /write_stdin/);
   assert.match(text, /\/OK 本次允许向终端输入/);
   assert.match(text, /\/NO 取消输入并中止当前任务/);
   assert.doesNotMatch(text, /\/P/);

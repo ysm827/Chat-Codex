@@ -8,7 +8,7 @@ import { BridgeDelivery } from "../../src/bridge/delivery.js";
 import { BRIDGE_SEND_FILE_PREFIX } from "../../src/bridge/media-extractor.js";
 import { SilentLogger, type Logger } from "../../src/logging/logger.js";
 import type { ChannelRegistry } from "../../src/channels/registry.js";
-import type { ChannelMedia, ChannelTarget } from "../../src/protocol/channel.js";
+import type { ChannelApprovalRequest, ChannelMedia, ChannelTarget } from "../../src/protocol/channel.js";
 
 class CapturingLogger implements Logger {
   readonly infos: Array<{ message: string; meta?: Record<string, unknown> }> = [];
@@ -106,23 +106,28 @@ test("BridgeDelivery falls back to text when an approval card cannot be sent", a
   assert.match(sentTexts[0] ?? "", /Codex 请求审批/);
 });
 
-test("BridgeDelivery sends terminal-input approvals through shared text instead of a legacy card", async () => {
+test("BridgeDelivery sends terminal-input approvals through a cancel-capable channel card", async () => {
   const approvals = new ApprovalManager();
   const pending = approvals.create("route", "user", {
     kind: "terminal_input",
     sessionId: "session-1",
     turnId: "turn-1",
     itemId: "command-item-1",
-    command: "write_stdin --session-id 42 'confirm\\n'",
+    command: "write_stdin --session-id 42 'confirm\n'",
+    environmentId: "remote",
+    terminalId: "42",
+    terminalInput: "confirm\n",
     availableDecisions: ["approve", "cancel"],
   });
   const sentTexts: string[] = [];
   let cardAttempts = 0;
+  let sentCard: ChannelApprovalRequest | undefined;
   const delivery = new BridgeDelivery({
     channels: {
       get: () => ({ sendApprovalRequest: async () => undefined }),
-      sendApprovalRequest: async () => {
+      sendApprovalRequest: async (_target: ChannelTarget, request: ChannelApprovalRequest) => {
         cardAttempts += 1;
+        sentCard = request;
         return { channelId: "mock", messageId: "card-1", deliveredAt: new Date().toISOString() };
       },
       sendText: async (_target: ChannelTarget, text: string) => {
@@ -137,10 +142,55 @@ test("BridgeDelivery sends terminal-input approvals through shared text instead 
 
   await delivery.sendApprovalUntilDelivered("route", target(), pending);
 
-  assert.equal(cardAttempts, 0);
+  assert.equal(cardAttempts, 1);
+  assert.equal(sentTexts.length, 0);
+  assert.equal(sentCard?.kind, "terminal_input");
+  assert.equal(sentCard?.command, "write_stdin --session-id 42 'confirm\\n'");
+  assert.equal(sentCard?.environmentId, "remote");
+  assert.equal(sentCard?.terminalId, "42");
+  assert.equal(sentCard?.terminalInput, "confirm\n");
+  assert.deepEqual(sentCard?.availableDecisions, ["approve", "cancel"]);
+});
+
+test("BridgeDelivery falls back to terminal-input text when a channel card fails", async () => {
+  const approvals = new ApprovalManager();
+  const pending = approvals.create("route", "user", {
+    kind: "terminal_input",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    itemId: "command-item-1",
+    command: "write_stdin --session-id 42 'confirm\n'",
+    terminalId: "42",
+    terminalInput: "confirm\n",
+    availableDecisions: ["approve", "cancel"],
+  });
+  const sentTexts: string[] = [];
+  let cardAttempts = 0;
+  const delivery = new BridgeDelivery({
+    channels: {
+      get: () => ({ sendApprovalRequest: async () => undefined }),
+      sendApprovalRequest: async () => {
+        cardAttempts += 1;
+        throw new Error("interactive messages unavailable");
+      },
+      sendText: async (_target: ChannelTarget, text: string) => {
+        sentTexts.push(text);
+        return { channelId: "mock", messageId: "text-1", deliveredAt: new Date().toISOString() };
+      },
+    } as unknown as ChannelRegistry,
+    approvals,
+    logger: new SilentLogger(),
+    approvalSendRetryDelayMs: 1,
+  });
+
+  await delivery.sendApprovalUntilDelivered("route", target(), pending);
+
+  assert.equal(cardAttempts, 1);
   assert.equal(sentTexts.length, 1);
   assert.match(sentTexts[0] ?? "", /Codex 请求终端输入审批/);
-  assert.match(sentTexts[0] ?? "", /write_stdin --session-id 42 'confirm\\n'/);
+  assert.match(sentTexts[0] ?? "", /目标终端: 42/);
+  assert.match(sentTexts[0] ?? "", /输入: "confirm\\n"/);
+  assert.doesNotMatch(sentTexts[0] ?? "", /write_stdin/);
   assert.match(sentTexts[0] ?? "", /\/OK 本次允许向终端输入/);
   assert.match(sentTexts[0] ?? "", /\/NO 取消输入并中止当前任务/);
   assert.doesNotMatch(sentTexts[0] ?? "", /\/P/);

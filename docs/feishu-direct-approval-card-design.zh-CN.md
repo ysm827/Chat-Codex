@@ -1,5 +1,10 @@
 # 飞书私聊审批卡片设计
 
+> 2026-09-05 更新：本文描述已实现的普通审批卡片与新版 Codex `writeStdin` 终端输入审批卡片。
+> 终端输入卡片只提供 `approve` / `cancel` 两个动作，普通审批仍保持
+> `approve` / `approve-session` / `deny` 三个动作。专用渠道适配记录见
+> [`codex-writestdin-channel-adaptation-design.zh-CN.md`](codex-writestdin-channel-adaptation-design.zh-CN.md)。
+
 ## 目标
 
 在不改变 Chat-Codex 统一审批状态机的前提下，为飞书私聊的 Codex 审批请求提供可点击卡片：
@@ -7,6 +12,8 @@
 - `通过一次` 对应 `/OK` 和 `approve`。
 - `本会话通过` 对应 `/P` 和 `approve-session`。
 - `拒绝` 对应 `/NO` 和 `deny`。
+- 对 `terminal_input`，`本次允许` 对应 `/OK` 和 `approve`，`取消并中止任务` 对应 `/NO` 和 `cancel`；
+  不提供 `/P`。
 
 卡片是飞书私聊的附加交互，不替代现有文本命令。微信、终端、未来 Slack/Telegram 等未实现卡片的渠道继续使用原有文本审批提示。
 
@@ -15,7 +22,8 @@
 本轮只实现：
 
 - 飞书 `p2p` 私聊。
-- Codex command、file change、permissions 等现有 `ApprovalManager` 请求。
+- Codex command、file change、permissions 等现有 `ApprovalManager` 请求，以及 `writeStdin` 映射出的
+  `terminal_input` 请求。
 - `card.action.trigger` WebSocket 回调。
 - 回调 toast 和已处理卡片的即时替换。
 - 卡片发送失败时自动回退为原有文本审批提示。
@@ -25,7 +33,7 @@
 - 飞书群聊、thread 或跨聊天审批。
 - 通用消息编辑、进度卡片、流式卡片或 CardKit 状态持久化。
 - 用户 OAuth、飞书工具或 OpenClaw runtime。
-- 替代 `/OK`、`/P`、`/NO` 文本命令。
+- 替代文本命令：普通审批仍支持 `/OK`、`/P`、`/NO`，终端输入仍支持 `/OK`、`/NO`。
 
 `ChannelCapabilities.messageUpdate` 继续为 `false`：本功能使用飞书卡片动作回调返回的即时卡片结果，不声明通用消息更新能力。
 
@@ -61,13 +69,18 @@ interface ChannelAdapter {
 }
 ```
 
-`ChannelApprovalRequest` 是卡片展示所需的脱离 adapter 的数据：审批 key、route、发起人、类型、session/turn、命令、原因、风险和允许的处理方式。通用卡片决策只包含 `approve`、`approve-session`、`deny`；内部 `cancel` 不展示为按钮。
+`ChannelApprovalRequest` 是卡片展示所需的脱离 adapter 的数据：审批 key、route、发起人、类型、session/turn、
+执行环境、命令、原因、风险和允许的处理方式。对于新版 `terminal_input`，中间件还传递已从官方
+`write_stdin --session-id <id> <input>` 规范表示恢复出的 terminal id 和原始输入；卡片展示这两个语义字段，
+而非把它误写成一条新命令。通用卡片决策包含 `approve`、`approve-session`、`deny`、`cancel`；但
+`PendingApproval` 转换时会按类型严格收敛：普通审批仍只展示前三者，`terminal_input` 只展示
+`approve`、`cancel`。因此扩展协议不会改变旧审批的三按钮交互。
 
 `ChannelRegistry` 负责把 adapter 注册的动作交给 Bridge，并再次校验 `channelId` 与 conversation capability。没有 `sendApprovalRequest` 的 adapter 返回 `undefined`，由 `BridgeDelivery` 自动走文本提示。
 
 ## 飞书卡片与回调
 
-待处理卡片使用标准 `interactive` 消息，包含审批信息、三个可用按钮和文本命令兜底提示。按钮 `value` 只携带：
+待处理卡片使用标准 `interactive` 消息，包含审批信息、当前请求实际允许的按钮和文本命令兜底提示。普通审批显示执行环境、原因、将执行的完整命令和工作目录；`terminal_input` 显示“本次允许 / 取消并中止任务”两个按钮，并明确说明“终端输入（不会启动新命令）”、执行环境、**目标终端**和带引号的**输入**。这与官方 Codex TUI 的审批内容语义一致；它不是把终端 TUI 的按钮外观复制到飞书。按钮 `value` 只携带：
 
 ```json
 {
@@ -88,7 +101,7 @@ interface ChannelAdapter {
 7. 卡片动作按 `messageId + operator + approvalKey + decision` 做 TTL 去重，避免飞书重投导致二次批准。
 8. Bridge 成功处理后返回 success toast 和无按钮的结果卡片；拒绝、过期或校验失败只返回 toast，不修改原卡片。
 
-这两层身份校验避免仅凭按钮 value 或 chat id 处理审批。`user_id` 与原始入站 `open_id` 无法在本地安全换算时会被拒绝，用户仍可发送文本 `/OK`、`/P` 或 `/NO`；不会为了兼容而放宽审批人校验。
+这两层身份校验避免仅凭按钮 value 或 chat id 处理审批。`user_id` 与原始入站 `open_id` 无法在本地安全换算时会被拒绝，用户仍可发送该类审批允许的文本命令（普通审批 `/OK`、`/P`、`/NO`；终端输入 `/OK`、`/NO`）；不会为了兼容而放宽审批人校验。
 
 ## 失败与恢复
 
@@ -137,7 +150,7 @@ interface ChannelAdapter {
 真实飞书私聊补测应确认：
 
 1. `card.action.trigger` 已订阅且按钮可回调。
-2. 三个按钮分别映射到一次批准、本会话批准、拒绝。
+2. 普通审批三个按钮分别映射到一次批准、本会话批准、拒绝；终端输入两个按钮分别映射到本次允许、取消并中止。
 3. 卡片成功后显示 toast 和无按钮结果。
-4. `/OK`、`/P`、`/NO` 仍能处理同一类审批。
+4. 普通审批的 `/OK`、`/P`、`/NO` 与终端输入的 `/OK`、`/NO` 仍能处理同一类审批。
 5. 长时间未处理的审批在进程持续运行时仍可点击。

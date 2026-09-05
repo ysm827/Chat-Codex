@@ -46,8 +46,19 @@ export function unsupportedApprovalDecisionText(
 export function formatApprovalCommandForDisplay(approval: Pick<ApprovalRequest, "kind" | "command">): string | undefined {
   const command = approval.command;
   if (!command) return undefined;
-  if (approval.kind !== "terminal_input") return command;
-  return command.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (character) => {
+  return formatApprovalTextForDisplay(command);
+}
+
+export function formatApprovalTextForDisplay(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, (character) => {
     return `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`;
   }).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+}
+
+/**
+ * Mirrors Codex TUI's quoted stdin presentation while keeping control
+ * characters visible instead of allowing them to alter a channel message.
+ */
+export function formatTerminalInputForDisplay(input: string): string {
+  return JSON.stringify(input);
 }

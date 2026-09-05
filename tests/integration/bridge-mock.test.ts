@@ -611,8 +611,11 @@ class TerminalInputApprovalCodexAdapter extends MockCodexAdapter {
         turnId,
         itemId: "original-command-item-1",
         command: "write_stdin --session-id 42 'confirm\\n'",
+        environmentId: "remote",
         cwd: "/workspace/project",
         reason: "程序正在等待确认",
+        terminalId: "42",
+        terminalInput: "confirm\\n",
         availableDecisions: ["approve", "cancel"],
       },
     };
@@ -2156,7 +2159,10 @@ test("Bridge maps terminal-input /NO to cancel and rejects /P without consuming 
 
   const approvalText = channel.sentMessages.find((message) => message.text.includes("Codex 请求终端输入审批"))?.text ?? "";
   assert.match(approvalText, /不会启动新命令/);
-  assert.match(approvalText, /write_stdin --session-id 42 'confirm\\n'/);
+  assert.match(approvalText, /执行环境: remote/);
+  assert.match(approvalText, /目标终端: 42/);
+  assert.match(approvalText, /输入: "confirm\\\\n"/);
+  assert.doesNotMatch(approvalText, /write_stdin/);
   assert.match(approvalText, /\/OK 本次允许向终端输入/);
   assert.match(approvalText, /\/NO 取消输入并中止当前任务/);
   assert.doesNotMatch(approvalText, /\/P/);

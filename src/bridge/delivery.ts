@@ -56,17 +56,15 @@ export class BridgeDelivery {
 
   async sendApprovalUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {
     const text = this.approvals.formatForChannel(pending);
-    const approvalRequest = pending.kind === "terminal_input"
-      ? undefined
-      : channelApprovalRequestFromPending(pending);
+    const approvalRequest = channelApprovalRequestFromPending(pending);
     let failures = 0;
     while (this.isApprovalStillPending(routeKey, pending.approvalKey)) {
-      // Existing channel cards only model the legacy approve/session/deny actions.
-      // Terminal input needs the protocol-level cancel action, so it uses the shared
-      // text fallback until each card renderer adds that explicit interaction.
-      const cardCapable = Boolean(approvalRequest && this.channels.get?.(target.channelId)?.sendApprovalRequest);
+      const cardCapable = Boolean(
+        approvalRequest.availableDecisions.length > 0
+        && this.channels.get?.(target.channelId)?.sendApprovalRequest,
+      );
       try {
-        if (cardCapable && approvalRequest) {
+        if (cardCapable) {
           const cardResult = await this.channels.sendApprovalRequest?.(target, approvalRequest);
           if (cardResult) {
             this.transcript?.outbound(target, text);

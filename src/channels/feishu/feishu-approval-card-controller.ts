@@ -153,7 +153,7 @@ export class FeishuApprovalCardController {
       return {
         type: "handled",
         message,
-        response: approvalCardToast("error", "审批处理失败，请发送 /OK、/P 或 /NO 重试。"),
+        response: approvalCardToast("error", approvalRetryText(card.request)),
       };
     }
   }
@@ -167,6 +167,12 @@ export class FeishuApprovalCardController {
     this.seenActions.set(actionKey, now + this.dedupTtlMs);
     return true;
   }
+}
+
+function approvalRetryText(request: ChannelApprovalRequest): string {
+  return request.kind === "terminal_input"
+    ? "审批处理失败，请发送 /OK 或 /NO 重试。"
+    : "审批处理失败，请发送 /OK、/P 或 /NO 重试。";
 }
 
 function approvalCardToast(

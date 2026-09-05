@@ -86,10 +86,13 @@
   Codex 2026-07 最新模型与协议适配设计。基于官方 GPT-5.6 最新模型页和 `references/openai-codex` HEAD `5c19155c`，说明模型动态元数据、开放 reasoning effort、service tier、协议漂移稳定性和后续新功能候选。
 
 - `codex-current-compatibility-audit-plan.zh-CN.md`
-  本轮最新版 Codex 兼容性审计与实施设计。以最新官方源码为主证据，记录 Chat-Codex 当前能力、模型适配、app-server 协议差异、渠道取舍、实施优先级和验收计划；第一轮源码审计已完成，协议项 1（`writeStdin`）的中间件实现已完成，其余项待逐项讨论。
+  本轮最新版 Codex 兼容性审计与实施设计。以最新官方源码为主证据，记录 Chat-Codex 当前能力、模型适配、app-server 协议差异、渠道取舍、实施优先级和验收计划；第一轮源码审计已完成，协议项 1（`writeStdin`）的中间件、微信文字链路和飞书私聊两按钮卡片已完成自动化实现，其余项待逐项讨论。
 
-- `codex-app-server-current-protocol-compatibility.zh-CN.md`
-  最新 Codex app-server 协议专用适配清单。逐项比对当前本地 Codex 源码与 Chat-Codex 已有能力，明确新增 RPC、通知、审批、用户输入、上下文刷新和 item 字段哪些必须适配、哪些仅分类、哪些当前不开放；不讨论模型或新产品功能。
+- `2026-09-05-codex-ddf04ad26789-app-server-protocol-compatibility.zh-CN.md`
+  2026-09-05 基于 Codex 源码 `ddf04ad26789d040f9ef6a96736f76602e35a6cc` 的 app-server 协议专用适配清单。逐项比对当前本地 Codex 源码与 Chat-Codex 已有能力，明确新增 RPC、通知、审批、用户输入、上下文刷新和 item 字段哪些必须适配、哪些仅分类、哪些当前不开放；不讨论模型或新产品功能。
+
+- `codex-writestdin-channel-adaptation-design.zh-CN.md`
+  Codex `writeStdin` 终端输入审批的微信/飞书渠道适配设计与进度。记录微信文字审批链路、飞书私聊两按钮卡片、通用 `cancel` decision 扩展、完整输入展示边界、自动化结果与待补的真实渠道测试。
 
 - `codex-reference-81da9deb0-compatibility.zh-CN.md`
   Codex 参考版本 `81da9deb0` 兼容性评估。以保持本地 Chat-Codex 正常运作为目标，记录当前 app-server 协议结论、远程执行环境与 `wait_for_environment` 的适配边界、已完成的协议分类和后续实际 CLI 升级门禁。
@@ -243,7 +246,7 @@ secrets/feishu.local.md
 27. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
 28. 继续拆 `src/codex/app-server-codex-adapter.ts` 时读 `app-server-codex-adapter-refactor-design.zh-CN.md`，确认当前剩余职责、分阶段模块边界和 app-server targeted 测试要求。
 29. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
-30. 做飞书私聊审批卡片、`card.action.trigger` 回调、按钮权限或文本回退时读 `feishu-direct-approval-card-design.zh-CN.md`。
+30. 做飞书私聊审批卡片、`card.action.trigger` 回调、按钮权限或文本回退时读 `feishu-direct-approval-card-design.zh-CN.md`；若是 Codex `writeStdin` 终端输入审批，再读 `codex-writestdin-channel-adaptation-design.zh-CN.md`。
 31. 做飞书插件版本升级、SDK 更新、卡片、thread 或群聊能力取舍时读 `feishu-plugin-2026.7.9-upgrade-assessment.zh-CN.md`，先区分独立中间件必须适配的协议变化和 OpenClaw runtime 专属能力。
 32. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
 33. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。

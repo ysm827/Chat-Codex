@@ -392,7 +392,7 @@ rl.on("line", (line) => {
       return;
     }
     if (prompt.includes("write stdin approval")) {
-      send({ method: "item/commandExecution/requestApproval", id: "stdin-approval-1", params: { kind: "writeStdin", threadId, turnId, itemId: "original-command-item-1", approvalId: "opaque-stdin-callback-id", startedAtMs: Date.now(), command: "write_stdin --session-id 42 'confirm\\n'", cwd: message.params.cwd, reason: "program waits for confirmation", availableDecisions: ["accept", "cancel"] } });
+      send({ method: "item/commandExecution/requestApproval", id: "stdin-approval-1", params: { kind: "writeStdin", threadId, turnId, itemId: "original-command-item-1", approvalId: "opaque-stdin-callback-id", startedAtMs: Date.now(), command: "write_stdin --session-id 42 'confirm\\n'", environmentId: "remote", cwd: message.params.cwd, reason: "program waits for confirmation", availableDecisions: ["accept", "cancel"] } });
       return;
     }
     if (prompt.includes("write stdin without command")) {
@@ -541,6 +541,9 @@ test("AppServerCodexAdapter maps writeStdin /NO semantics to cancel without trea
       assert.equal(event.approval.adapterApprovalId, "stdin-approval-1");
       assert.equal(event.approval.itemId, "original-command-item-1");
       assert.equal(event.approval.command, "write_stdin --session-id 42 'confirm\n'");
+      assert.equal(event.approval.environmentId, "remote");
+      assert.equal(event.approval.terminalId, "42");
+      assert.equal(event.approval.terminalInput, "confirm\n");
       assert.deepEqual(event.approval.availableDecisions, ["approve", "cancel"]);
       await adapter.resolveApproval(event.approval.adapterApprovalId, "deny");
     }

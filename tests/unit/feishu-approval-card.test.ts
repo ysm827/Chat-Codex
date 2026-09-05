@@ -19,6 +19,7 @@ function approvalRequest(): ChannelApprovalRequest {
     turnId: "turn-1234567890",
     itemId: "item-1",
     command: "npm test",
+    environmentId: "remote",
     cwd: "/workspace/project",
     reason: "运行测试",
     risk: "low",
@@ -42,6 +43,35 @@ test("Feishu approval card presents only supported decisions with stable action 
   ]);
 });
 
+test("Feishu terminal-input approval card presents allow and cancel without session approval", () => {
+  const card = buildFeishuApprovalCard(terminalInputApprovalRequest()) as {
+    header: { title: { content: string } };
+    elements: Array<{
+      tag?: string;
+      text?: { content?: string };
+      elements?: Array<{ content?: string }>;
+      actions?: Array<{ text: { content: string }; value: Record<string, unknown> }>;
+    }>;
+  };
+  const details = card.elements.find((element) => element.tag === "div")?.text?.content;
+  const actionElement = card.elements.find((element) => element.tag === "action");
+  const note = card.elements.find((element) => element.tag === "note")?.elements?.[0]?.content;
+
+  assert.equal(card.header.title.content, "Codex 请求终端输入审批");
+  assert.match(details ?? "", /类型：终端输入（不会启动新命令）/);
+  assert.match(details ?? "", /执行环境：remote/);
+  assert.match(details ?? "", /目标终端：42/);
+  assert.match(details ?? "", /输入："confirm\\n"/);
+  assert.doesNotMatch(details ?? "", /write_stdin/);
+  assert.deepEqual(actionElement?.actions?.map((action) => action.text.content), ["本次允许", "取消并中止任务"]);
+  assert.deepEqual(actionElement?.actions?.map((action) => action.value), [
+    { action: FEISHU_APPROVAL_CARD_ACTION, approvalKey: "a001", decision: "approve" },
+    { action: FEISHU_APPROVAL_CARD_ACTION, approvalKey: "a001", decision: "cancel" },
+  ]);
+  assert.equal(note, "也可直接发送 /OK 或 /NO。");
+  assert.doesNotMatch(JSON.stringify(card), /\/P/);
+});
+
 test("Feishu approval card renders approval metadata as plain text", () => {
   const card = buildFeishuApprovalCard(approvalRequest()) as {
     elements: Array<{
@@ -55,11 +85,12 @@ test("Feishu approval card renders approval metadata as plain text", () => {
     tag: "plain_text",
     content: [
       "类型：command",
+      "执行环境：remote",
+      "原因：运行测试",
+      "将执行的命令：npm test",
+      "CWD：/workspace/project",
       "会话：session-1234",
       "Turn：turn-1234567",
-      "CWD：/workspace/project",
-      "命令：npm test",
-      "原因：运行测试",
       "风险：low",
     ].join("\n"),
   });
@@ -87,6 +118,20 @@ test("Feishu approval action parser accepts context ids and user_id fallback", (
   });
 });
 
+test("Feishu approval action parser accepts terminal-input cancel", () => {
+  const action = parseFeishuApprovalCardAction(sampleFeishuCardActionEvent({
+    action: {
+      value: {
+        action: FEISHU_APPROVAL_CARD_ACTION,
+        approvalKey: "a001",
+        decision: "cancel",
+      },
+    },
+  }));
+
+  assert.equal(action?.decision, "cancel");
+});
+
 test("Feishu approval action parser rejects foreign apps and malformed decisions", () => {
   assert.equal(parseFeishuApprovalCardAction(sampleFeishuCardActionEvent({
     app_id: "cli_other",
@@ -96,7 +141,7 @@ test("Feishu approval action parser rejects foreign apps and malformed decisions
       value: {
         action: FEISHU_APPROVAL_CARD_ACTION,
         approvalKey: "a001",
-        decision: "cancel",
+        decision: "not-a-decision",
       },
     },
   })), undefined);
@@ -118,3 +163,29 @@ test("Feishu approval callback replaces a resolved card and keeps rejected cards
   assert.equal(rejected.toast.type, "warning");
   assert.equal(rejected.card, undefined);
 });
+
+test("Feishu terminal-input cancel callback renders a cancelled result card", () => {
+  const callback = feishuApprovalCardCallback(terminalInputApprovalRequest(), {
+    status: "resolved",
+    text: "审批已处理: 已取消本次终端输入，Codex 将中止当前任务。",
+    decision: "cancel",
+  });
+  const card = callback.card?.data as {
+    header?: { title?: { content?: string }; template?: string };
+  } | undefined;
+
+  assert.equal(callback.toast.type, "success");
+  assert.equal(card?.header?.title?.content, "Codex 终端输入已取消");
+  assert.equal(card?.header?.template, "red");
+});
+
+function terminalInputApprovalRequest(): ChannelApprovalRequest {
+  return {
+    ...approvalRequest(),
+    kind: "terminal_input",
+    command: "write_stdin --session-id 42 'confirm\n'",
+    terminalId: "42",
+    terminalInput: "confirm\n",
+    availableDecisions: ["approve", "cancel"],
+  };
+}

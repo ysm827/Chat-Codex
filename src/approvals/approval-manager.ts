@@ -1,5 +1,9 @@
 import type { ApprovalDecision, ApprovalRequest, PendingApproval } from "./types.js";
-import { availableApprovalDecisions, formatApprovalCommandForDisplay } from "./approval-policy.js";
+import {
+  availableApprovalDecisions,
+  formatApprovalCommandForDisplay,
+  formatTerminalInputForDisplay,
+} from "./approval-policy.js";
 
 export interface ApprovalManagerOptions {
   ttlMs?: number | null;
@@ -103,12 +107,18 @@ export class ApprovalManager {
       const lines = [
         "Codex 请求终端输入审批",
         "类型: 终端输入（不会启动新命令）",
-        `Session: ${shortId(pending.sessionId)}`,
-        `Turn: ${shortId(pending.turnId)}`,
       ];
+      if (pending.environmentId) lines.push(`执行环境: ${pending.environmentId}`);
+      if (pending.reason) lines.push(`原因: ${pending.reason}`);
+      if (pending.terminalId && pending.terminalInput !== undefined) {
+        lines.push(`目标终端: ${pending.terminalId}`);
+        lines.push(`输入: ${formatTerminalInputForDisplay(pending.terminalInput)}`);
+      } else if (command) {
+        lines.push("原始终端输入请求:", command);
+      }
       if (pending.cwd) lines.push(`CWD: ${pending.cwd}`);
-      if (command) lines.push("将写入已运行终端:", command);
-      if (pending.reason) lines.push(`Reason: ${pending.reason}`);
+      lines.push(`Session: ${shortId(pending.sessionId)}`);
+      lines.push(`Turn: ${shortId(pending.turnId)}`);
       if (pending.risk) lines.push(`风险: ${pending.risk}`);
       lines.push("", "快捷回复:");
       if (decisions.includes("approve")) lines.push("/OK 本次允许向终端输入");
@@ -118,12 +128,13 @@ export class ApprovalManager {
     const lines = [
       "Codex 请求审批",
       `类型: ${pending.kind}`,
-      `Session: ${shortId(pending.sessionId)}`,
-      `Turn: ${shortId(pending.turnId)}`,
     ];
+    if (pending.environmentId) lines.push(`执行环境: ${pending.environmentId}`);
+    if (pending.reason) lines.push(`原因: ${pending.reason}`);
+    if (command) lines.push("将执行的命令:", command);
     if (pending.cwd) lines.push(`CWD: ${pending.cwd}`);
-    if (command) lines.push("Command:", command);
-    if (pending.reason) lines.push(`Reason: ${pending.reason}`);
+    lines.push(`Session: ${shortId(pending.sessionId)}`);
+    lines.push(`Turn: ${shortId(pending.turnId)}`);
     if (pending.risk) lines.push(`风险: ${pending.risk}`);
     lines.push("", "快捷回复:");
     if (decisions.includes("approve")) lines.push("/OK 通过当前审批");

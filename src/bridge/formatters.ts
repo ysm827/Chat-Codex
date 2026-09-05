@@ -1,5 +1,9 @@
 import type { ApprovalDecision, PendingApproval } from "../approvals/types.js";
-import { availableApprovalDecisions, formatApprovalCommandForDisplay } from "../approvals/approval-policy.js";
+import {
+  availableApprovalDecisions,
+  formatApprovalCommandForDisplay,
+  formatTerminalInputForDisplay,
+} from "../approvals/approval-policy.js";
 import type { CodexRunPolicy, CodexRunPolicyStatus } from "../codex/codex-cli.js";
 import { truncateDisplayText } from "../codex/codex-cli.js";
 import type {
@@ -614,14 +618,20 @@ export function formatPendingApprovalStatus(approval: PendingApproval | undefine
   if (!approval) return [];
   const decisions = availableApprovalDecisions(approval);
   const command = formatApprovalCommandForDisplay(approval);
+  const hasTerminalInputDetails = approval.kind === "terminal_input"
+    && Boolean(approval.terminalId)
+    && approval.terminalInput !== undefined;
   return [
     "",
     "**待处理审批**",
     `- 类型: ${formatApprovalKindForUser(approval.kind)}`,
     approval.kind === "terminal_input" ? "- 说明: 将向已运行的终端输入内容，不会启动新命令。" : undefined,
-    approval.cwd ? `- 工作目录: \`${approval.cwd}\`` : undefined,
+    approval.environmentId ? `- 执行环境: ${approval.environmentId}` : undefined,
     approval.reason ? `- 原因: ${approval.reason}` : undefined,
-    command ? "```shell\n" + command + "\n```" : undefined,
+    hasTerminalInputDetails ? `- 目标终端: ${approval.terminalId}` : undefined,
+    hasTerminalInputDetails ? `- 输入: ${formatTerminalInputForDisplay(approval.terminalInput ?? "")}` : undefined,
+    approval.cwd ? `- 工作目录: \`${approval.cwd}\`` : undefined,
+    !hasTerminalInputDetails && command ? "```shell\n" + command + "\n```" : undefined,
     "快捷回复：",
     decisions.includes("approve") ? "```text\n/OK\n```" : undefined,
     decisions.includes("approve-session") ? "```text\n/P\n```" : undefined,

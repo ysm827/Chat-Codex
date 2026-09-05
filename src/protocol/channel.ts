@@ -59,7 +59,7 @@ export interface ChannelMessage {
   raw?: unknown;
 }
 
-export type ChannelApprovalDecision = "approve" | "approve-session" | "deny";
+export type ChannelApprovalDecision = "approve" | "approve-session" | "deny" | "cancel";
 
 export interface ChannelApprovalRequest {
   approvalKey: string;
@@ -70,8 +70,11 @@ export interface ChannelApprovalRequest {
   turnId: string;
   itemId: string;
   command?: string;
+  environmentId?: string;
   cwd?: string;
   reason?: string;
+  terminalId?: string;
+  terminalInput?: string;
   risk?: "low" | "medium" | "high" | "unknown";
   availableDecisions: ChannelApprovalDecision[];
 }
@@ -178,7 +181,7 @@ export interface ChannelAdapter {
 }
 
 export function isChannelApprovalDecision(value: unknown): value is ChannelApprovalDecision {
-  return value === "approve" || value === "approve-session" || value === "deny";
+  return value === "approve" || value === "approve-session" || value === "deny" || value === "cancel";
 }
 
 export function buildRouteKey(input: {

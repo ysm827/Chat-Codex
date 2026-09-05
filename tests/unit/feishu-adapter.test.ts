@@ -495,6 +495,88 @@ test("FeishuAdapter sends direct approval cards and returns a resolved card call
   await adapter.stop();
 });
 
+test("FeishuAdapter sends terminal-input cards and forwards cancel", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  const actions: Array<{ approvalKey: string; decision: string }> = [];
+  adapter.onApprovalAction(async (action) => {
+    actions.push({ approvalKey: action.approvalKey, decision: action.decision });
+    return {
+      status: "resolved",
+      text: "审批已处理: 已取消本次终端输入，Codex 将中止当前任务。",
+      decision: action.decision,
+    };
+  });
+
+  await adapter.start();
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest({
+    kind: "terminal_input",
+    command: "write_stdin --session-id 42 'confirm\n'",
+    terminalId: "42",
+    terminalInput: "confirm\n",
+    availableDecisions: ["approve", "cancel"],
+  }));
+  const payload = factory.client.replyPayloads.at(-1);
+  const card = JSON.parse(payload?.data.content ?? "{}") as {
+    header?: { title?: { content?: string } };
+    elements?: Array<{
+      tag?: string;
+      actions?: Array<{ text: { content: string }; value: Record<string, unknown> }>;
+    }>;
+  };
+  const actionsElement = card.elements?.find((element) => element.tag === "action");
+  const cancelAction = actionsElement?.actions?.[1];
+
+  assert.equal(card.header?.title?.content, "Codex 请求终端输入审批");
+  assert.deepEqual(actionsElement?.actions?.map((action) => action.text.content), ["本次允许", "取消并中止任务"]);
+  assert.deepEqual(cancelAction?.value, {
+    action: "chat_codex_approval",
+    approvalKey: "a001",
+    decision: "cancel",
+  });
+
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_reply", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: { value: cancelAction?.value },
+  })) as {
+    toast?: { type?: string; content?: string };
+    card?: { type?: string; data?: { header?: { title?: { content?: string } } } };
+  };
+
+  assert.deepEqual(actions, [{ approvalKey: "a001", decision: "cancel" }]);
+  assert.equal(response.toast?.type, "success");
+  assert.match(response.toast?.content ?? "", /已取消本次终端输入/);
+  assert.equal(response.card?.type, "raw");
+  assert.equal(response.card?.data?.header?.title?.content, "Codex 终端输入已取消");
+  await adapter.stop();
+});
+
+test("FeishuAdapter rejects cancel injected into an ordinary approval card", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  let handled = 0;
+  adapter.onApprovalAction(async () => {
+    handled += 1;
+    return { status: "resolved", text: "不应进入处理器", decision: "cancel" };
+  });
+
+  await adapter.start();
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_reply", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: {
+      value: { action: "chat_codex_approval", approvalKey: "a001", decision: "cancel" },
+    },
+  })) as { toast?: { type?: string; content?: string } };
+
+  assert.equal(handled, 0);
+  assert.equal(response.toast?.type, "warning");
+  assert.match(response.toast?.content ?? "", /审批动作无效/);
+  await adapter.stop();
+});
+
 test("FeishuAdapter rejects approval card actions from another private user", async () => {
   const factory = new FakeFeishuTransportFactory();
   const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });

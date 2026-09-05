@@ -1,4 +1,5 @@
 import type { ApprovalDecision, ApprovalKind, ApprovalRequest } from "../../approvals/types.js";
+import { terminalInputApprovalDetailsFromCommand } from "./terminal-input-approval.js";
 import { arrayValue, objectValue, stringValue } from "./value-parsers.js";
 
 export function approvalKindForMethod(method: string, params: Record<string, unknown> = {}): ApprovalKind | undefined {
@@ -38,6 +39,10 @@ export function approvalFromServerRequest(
   const turnId = stringValue(params.turnId) ?? stringValue(params.callId) ?? "unknown-turn";
   const itemId = stringValue(params.itemId) ?? stringValue(params.callId) ?? String(requestId);
   const command = commandFromParams(params);
+  const terminalInput = kind === "terminal_input"
+    ? terminalInputApprovalDetailsFromCommand(params.command)
+    : undefined;
+  const environmentId = stringValue(params.environmentId);
   const cwd = stringValue(params.cwd) ?? stringValue(params.grantRoot);
   const reason = stringValue(params.reason);
   return {
@@ -47,8 +52,13 @@ export function approvalFromServerRequest(
     turnId,
     itemId,
     command,
+    ...(environmentId ? { environmentId } : {}),
     cwd,
     reason,
+    ...(terminalInput ? {
+      terminalId: terminalInput.terminalId,
+      terminalInput: terminalInput.input,
+    } : {}),
     risk: command && riskyCommand(command) ? "high" : undefined,
     availableDecisions: availableDecisionsFromParams(params, kind),
     raw: params,
