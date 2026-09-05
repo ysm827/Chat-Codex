@@ -16,6 +16,8 @@ export interface MaterializedFeishuMedia {
   mimeType?: string;
 }
 
+export type FeishuUploadFileType = "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
+
 export async function downloadFeishuInboundAttachments(params: {
   client: FeishuSdkClient;
   message: ChannelMessage;
@@ -50,7 +52,7 @@ export async function materializeFeishuChannelMedia(media: ChannelMedia): Promis
   };
 }
 
-export function feishuFileTypeForName(fileName: string, mimeType?: string): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
+export function feishuFileTypeForName(fileName: string, mimeType?: string): FeishuUploadFileType {
   const ext = path.extname(fileName).toLowerCase();
   if (ext === ".opus") return "opus";
   if (ext === ".mp4" || mimeType === "video/mp4") return "mp4";
@@ -59,6 +61,42 @@ export function feishuFileTypeForName(fileName: string, mimeType?: string): "opu
   if (ext === ".xls" || ext === ".xlsx") return "xls";
   if (ext === ".ppt" || ext === ".pptx") return "ppt";
   return "stream";
+}
+
+/**
+ * Reads the movie-header duration from a normal ISO BMFF/MP4 container.
+ * This keeps video delivery self-contained: no ffmpeg or ffprobe process is
+ * required just to satisfy Feishu's MP4 upload metadata.
+ */
+export function parseMp4DurationMs(buffer: Buffer): number | undefined {
+  const moov = findIsoBmffBox(buffer, 0, buffer.length, "moov");
+  if (!moov) return undefined;
+  const mvhd = findIsoBmffBox(buffer, moov.payloadStart, moov.end, "mvhd");
+  if (!mvhd || mvhd.payloadStart + 4 > mvhd.end) return undefined;
+
+  const version = buffer.readUInt8(mvhd.payloadStart);
+  const base = mvhd.payloadStart + 4; // version + flags
+  let timescale: number;
+  let duration: number;
+  if (version === 1) {
+    if (base + 28 > mvhd.end) return undefined;
+    timescale = buffer.readUInt32BE(base + 16);
+    const rawDuration = buffer.readBigUInt64BE(base + 20);
+    if (rawDuration > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    duration = Number(rawDuration);
+  } else if (version === 0) {
+    if (base + 16 > mvhd.end) return undefined;
+    timescale = buffer.readUInt32BE(base + 8);
+    duration = buffer.readUInt32BE(base + 12);
+  } else {
+    return undefined;
+  }
+
+  if (!Number.isFinite(timescale) || timescale <= 0 || !Number.isFinite(duration) || duration <= 0) {
+    return undefined;
+  }
+  const milliseconds = Math.round((duration / timescale) * 1000);
+  return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : undefined;
 }
 
 export function feishuUploadKey(response: unknown, key: "image_key" | "file_key"): string | undefined {
@@ -70,6 +108,43 @@ export function feishuUploadKey(response: unknown, key: "image_key" | "file_key"
   if (data && typeof data === "object") {
     const nested = (data as Record<string, unknown>)[key];
     if (typeof nested === "string" && nested.trim()) return nested;
+  }
+  return undefined;
+}
+
+interface IsoBmffBox {
+  payloadStart: number;
+  end: number;
+}
+
+function findIsoBmffBox(
+  buffer: Buffer,
+  start: number,
+  end: number,
+  expectedType: string,
+): IsoBmffBox | undefined {
+  let offset = start;
+  while (offset + 8 <= end) {
+    const size32 = buffer.readUInt32BE(offset);
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    let headerSize = 8;
+    let size = size32;
+    if (size32 === 1) {
+      if (offset + 16 > end) return undefined;
+      const size64 = buffer.readBigUInt64BE(offset + 8);
+      if (size64 > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+      size = Number(size64);
+      headerSize = 16;
+    } else if (size32 === 0) {
+      size = end - offset;
+    }
+    if (size < headerSize || offset + size > end) return undefined;
+    const box: IsoBmffBox = {
+      payloadStart: offset + headerSize,
+      end: offset + size,
+    };
+    if (type === expectedType) return box;
+    offset += size;
   }
   return undefined;
 }

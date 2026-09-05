@@ -396,7 +396,7 @@ event.message.create_time
 飞书 adapter 已实现 `sendMedia()`：
 
 - 图片：读取本地文件或 URL 为 `Buffer`，调用 `client.im.image.create({ image_type: "message" })` 上传，拿到 `image_key` 后发送 `msg_type: "image"`。
-- 文件：读取本地文件或 URL 为 `Buffer`，按扩展名映射 `pdf` / `doc` / `xls` / `ppt` / `mp4` / `opus`，其它类型使用 `stream`，调用 `client.im.file.create` 上传，拿到 `file_key` 后发送 `msg_type: "file"`。
+- 文件：读取本地文件或 URL 为 `Buffer`，按扩展名映射 `pdf` / `doc` / `xls` / `ppt` / `mp4` / `opus`，其它类型使用 `stream`，调用 `client.im.file.create` 上传。可读取 `mvhd` 时长的 MP4 会带毫秒级 `duration`，拿到 `file_key` 后发送 `msg_type: "media"`；无法读取时长的 MP4 降级为 `stream` 并发送普通 `msg_type: "file"`。
 - 如果 `ChannelMedia.caption` 存在，先发送一条 `post` 文本说明，再发送媒体消息。
 - 发送仍优先 `reply` 原消息，失败后回退 `message.create` 到当前 `chat_id`。
 

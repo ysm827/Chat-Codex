@@ -186,6 +186,67 @@ test("FeishuAdapter uploads and sends image and file media", async () => {
   ]);
 });
 
+test("FeishuAdapter sends a direct-chat MP4 as Feishu media with its parsed duration", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, connectOnStart: false });
+  const dir = tempDir("codex-feishu-video-send-");
+  const videoPath = path.join(dir, "demo.mp4");
+  const video = mp4WithDuration(5_000);
+  fs.writeFileSync(videoPath, video);
+  await adapter.start();
+
+  await adapter.sendMedia({
+    channelId: "feishu",
+    routeKey: "feishu:work:direct:oc_user",
+    accountId: "work",
+    conversation: { id: "oc_user", kind: "direct" },
+    recipient: { id: "ou_user" },
+    context: { sourceMessageId: "om_source" },
+  }, {
+    type: "file",
+    path: videoPath,
+    name: "demo.mp4",
+    mimeType: "video/mp4",
+  });
+
+  assert.equal(factory.client.fileCreatePayloads.length, 1);
+  assert.equal(factory.client.fileCreatePayloads[0]?.data.file_type, "mp4");
+  assert.equal(factory.client.fileCreatePayloads[0]?.data.file_name, "demo.mp4");
+  assert.equal(factory.client.fileCreatePayloads[0]?.data.duration, 5_000);
+  assert.deepEqual(factory.client.fileCreatePayloads[0]?.data.file, video);
+  assert.deepEqual(factory.client.replyPayloads.map((payload) => payload.data.msg_type), ["media"]);
+  assert.deepEqual(factory.client.replyPayloads.map((payload) => JSON.parse(payload.data.content)), [
+    { file_key: "file_upload" },
+  ]);
+});
+
+test("FeishuAdapter falls back to a normal attachment when an MP4 duration is unreadable", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, connectOnStart: false });
+  const dir = tempDir("codex-feishu-video-fallback-");
+  const videoPath = path.join(dir, "broken.mp4");
+  fs.writeFileSync(videoPath, Buffer.from("not an mp4 container"));
+  await adapter.start();
+
+  await adapter.sendMedia({
+    channelId: "feishu",
+    routeKey: "feishu:work:direct:oc_user",
+    accountId: "work",
+    conversation: { id: "oc_user", kind: "direct" },
+    recipient: { id: "ou_user" },
+    context: { sourceMessageId: "om_source" },
+  }, {
+    type: "file",
+    path: videoPath,
+    name: "broken.mp4",
+    mimeType: "video/mp4",
+  });
+
+  assert.equal(factory.client.fileCreatePayloads[0]?.data.file_type, "stream");
+  assert.equal(factory.client.fileCreatePayloads[0]?.data.duration, undefined);
+  assert.deepEqual(factory.client.replyPayloads.map((payload) => payload.data.msg_type), ["file"]);
+});
+
 test("FeishuAdapter emits ChannelMessage for p2p text events and deduplicates message_id", async () => {
   const factory = new FakeFeishuTransportFactory();
   const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
@@ -752,6 +813,21 @@ test("FeishuAdapter does not send approval cards to non-direct conversations", a
 
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function mp4WithDuration(durationMs: number): Buffer {
+  const movieHeader = Buffer.alloc(20);
+  movieHeader.writeUInt32BE(1_000, 12);
+  movieHeader.writeUInt32BE(durationMs, 16);
+  return isoBmffBox("moov", isoBmffBox("mvhd", movieHeader));
+}
+
+function isoBmffBox(type: string, payload: Buffer): Buffer {
+  const box = Buffer.alloc(8 + payload.length);
+  box.writeUInt32BE(box.length, 0);
+  box.write(type, 4, 4, "ascii");
+  payload.copy(box, 8);
+  return box;
 }
 
 function approvalTarget() {

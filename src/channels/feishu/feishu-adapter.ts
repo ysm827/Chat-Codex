@@ -42,6 +42,7 @@ import {
   feishuFileTypeForName,
   feishuUploadKey,
   materializeFeishuChannelMedia,
+  parseMp4DurationMs,
 } from "./feishu-media.js";
 import type {
   FeishuAdapterOptions,
@@ -286,16 +287,26 @@ export class FeishuAdapter implements ChannelAdapter {
         if (!imageKey) throw new Error("飞书图片上传响应缺少 image_key");
         return this.sendFeishuMessage(target, "image", JSON.stringify({ image_key: imageKey }), options);
       }
+      const detectedFileType = feishuFileTypeForName(materialized.fileName, materialized.mimeType);
+      const duration = detectedFileType === "mp4" ? parseMp4DurationMs(materialized.buffer) : undefined;
+      // A malformed or fragmented MP4 can lack a readable movie header. It is
+      // still useful as a downloadable file, so use Feishu's generic stream
+      // upload instead of failing the whole /sendfile delivery.
+      const uploadFileType = detectedFileType === "mp4" && duration === undefined
+        ? "stream"
+        : detectedFileType;
       const upload = await client.im.file.create({
         data: {
-          file_type: feishuFileTypeForName(materialized.fileName, materialized.mimeType),
+          file_type: uploadFileType,
           file_name: materialized.fileName,
           file: materialized.buffer,
+          ...(duration !== undefined ? { duration } : {}),
         },
       });
       const fileKey = feishuUploadKey(upload, "file_key");
       if (!fileKey) throw new Error("飞书文件上传响应缺少 file_key");
-      return this.sendFeishuMessage(target, "file", JSON.stringify({ file_key: fileKey }), options);
+      const messageType = uploadFileType === "mp4" ? "media" : "file";
+      return this.sendFeishuMessage(target, messageType, JSON.stringify({ file_key: fileKey }), options);
     } catch (error) {
       this.recordSendError(error, "media-send-failed");
       throw error;
